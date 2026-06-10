@@ -145,6 +145,21 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                 finalResult.set(event.path("result").asText(""));
                 return;
             }
+            if ("user".equals(type)) {
+                // Count how many subagents returned tool_result blocks.
+                JsonNode content = event.path("message").path("content");
+                if (!content.isArray()) return;
+                long returned = 0;
+                for (JsonNode block : content) {
+                    if ("tool_result".equals(block.path("type").asText())) returned++;
+                }
+                if (returned > 0) {
+                    context.eventConsumer().accept(
+                            "[supervisor-agent] " + returned + " subagent(s) returned results"
+                    );
+                }
+                return;
+            }
             if (!"assistant".equals(type)) {
                 return;
             }
@@ -153,19 +168,29 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                 return;
             }
             for (JsonNode block : content) {
-                if (!"tool_use".equals(block.path("type").asText())
-                        || !"Agent".equals(block.path("name").asText())) {
-                    continue;
+                String blockType = block.path("type").asText();
+                if ("tool_use".equals(blockType)
+                        && "Agent".equals(block.path("name").asText())) {
+                    JsonNode input = block.path("input");
+                    String agent = input.path("subagent_type").asText(
+                            input.path("name").asText("hunter")
+                    );
+                    String description = input.path("description").asText("");
+                    context.eventConsumer().accept(
+                            "[supervisor-agent] delegated " + agent
+                                    + (description.isBlank() ? "" : ": " + description)
+                    );
+                } else if ("text".equals(blockType)) {
+                    String text = block.path("text").asText("").strip();
+                    if (!text.isBlank()) {
+                        String preview = text.length() > 300
+                                ? text.substring(0, 300) + "…"
+                                : text;
+                        context.eventConsumer().accept(
+                                "[supervisor] " + preview.replace("\n", " | ")
+                        );
+                    }
                 }
-                JsonNode input = block.path("input");
-                String agent = input.path("subagent_type").asText(
-                        input.path("name").asText("hunter")
-                );
-                String description = input.path("description").asText("");
-                context.eventConsumer().accept(
-                        "[supervisor-agent] delegated " + agent
-                                + (description.isBlank() ? "" : ": " + description)
-                );
             }
         } catch (Exception ignored) {
             // Ignore non-JSON diagnostic lines from the CLI.
