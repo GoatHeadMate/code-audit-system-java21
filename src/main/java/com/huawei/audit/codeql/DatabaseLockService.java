@@ -54,6 +54,7 @@ public class DatabaseLockService {
         try (FileChannel channel = FileChannel.open(
                 lockPath,
                 StandardOpenOption.CREATE,
+                StandardOpenOption.READ,
                 StandardOpenOption.WRITE
         )) {
             while (Instant.now().isBefore(deadline)) {
