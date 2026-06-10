@@ -1,11 +1,9 @@
-/**
- * 查找 JAX-RS 端点方法中缺失鉴权调用的端点。
- * 仅当同类中存在其他端点方法调用了鉴权方法时才报告（对比检测），
- * 避免对全局统一鉴权的项目产生误报。
- *
- * 鉴权方法模式: checkAuth*/checkOps*/authorize/isAuth/hasRole/verifyToken 等。
- * HTTP 注解: JAX-RS (@POST/@GET/@PUT/@DELETE) 及 Spring MVC 注解。
- */
+// 查找 JAX-RS 端点方法中缺失鉴权调用的端点。
+// 仅当同类中存在其他端点方法调用了鉴权方法时才报告（对比检测），
+// 避免对全局统一鉴权的项目产生误报。
+//
+// 鉴权方法模式: checkAuth* / checkOps* / authorize / isAuth / hasRole / verifyToken 等。
+// HTTP 注解: JAX-RS (@POST/@GET/@PUT/@DELETE) 及 Spring MVC 注解。
 import java
 
 private predicate isHttpEndpoint(Method m) {

@@ -169,16 +169,17 @@ public class CodeqlService {
                     continue;
                 }
 
-                String content = Files.readString(json);
-                if (content.length() > MAX_CHARS_PER_QUERY) {
-                    content = content.substring(0, MAX_CHARS_PER_QUERY);
-                }
-                if (totalChars + content.length() > MAX_TOTAL_EVIDENCE) {
+                JsonNode node = objectMapper.readTree(json.toFile());
+                int charCount = Math.min(
+                        objectMapper.writeValueAsString(node).length(),
+                        MAX_CHARS_PER_QUERY
+                );
+                if (totalChars + charCount > MAX_TOTAL_EVIDENCE) {
                     errors.put(queryName, "skipped because evidence budget was exhausted");
                     break;
                 }
-                results.put(queryName, objectMapper.readTree(content));
-                totalChars += content.length();
+                results.put(queryName, node);
+                totalChars += charCount;
             } catch (Exception exception) {
                 errors.put(queryName, exception.getMessage());
                 logs.publish(job, "[hunter:" + hunter + "] query failed: " + exception.getMessage());
