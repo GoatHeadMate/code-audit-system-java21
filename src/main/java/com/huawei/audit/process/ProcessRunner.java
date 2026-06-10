@@ -2,6 +2,7 @@ package com.huawei.audit.process;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -22,6 +23,7 @@ public class ProcessRunner {
         this.executor = executor;
     }
 
+    /** System processes (CodeQL, etc.) — use the platform default charset. */
     public ProcessResult run(
             List<String> command,
             Path workingDirectory,
@@ -29,22 +31,30 @@ public class ProcessRunner {
             Duration timeout,
             Consumer<String> outputConsumer
     ) throws IOException, InterruptedException {
-        return run(
-                command,
-                workingDirectory,
-                environment,
-                timeout,
-                null,
-                outputConsumer
-        );
+        return run(command, workingDirectory, environment, timeout,
+                null, Charset.defaultCharset(), outputConsumer);
     }
 
+    /** Processes that receive stdin and produce UTF-8 output (Claude Code). */
     public ProcessResult run(
             List<String> command,
             Path workingDirectory,
             Map<String, String> environment,
             Duration timeout,
             String standardInput,
+            Consumer<String> outputConsumer
+    ) throws IOException, InterruptedException {
+        return run(command, workingDirectory, environment, timeout,
+                standardInput, StandardCharsets.UTF_8, outputConsumer);
+    }
+
+    private ProcessResult run(
+            List<String> command,
+            Path workingDirectory,
+            Map<String, String> environment,
+            Duration timeout,
+            String standardInput,
+            Charset outputCharset,
             Consumer<String> outputConsumer
     ) throws IOException, InterruptedException {
         ProcessBuilder builder = new ProcessBuilder(command)
@@ -55,7 +65,7 @@ public class ProcessRunner {
 
         List<String> output = new ArrayList<>();
         Future<?> reader = executor.submit(() -> {
-            try (BufferedReader lines = process.inputReader(StandardCharsets.UTF_8)) {
+            try (BufferedReader lines = process.inputReader(outputCharset)) {
                 String line;
                 while ((line = lines.readLine()) != null) {
                     synchronized (output) {
@@ -76,13 +86,17 @@ public class ProcessRunner {
             process.getOutputStream().close();
         }
 
-        boolean completed = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-        if (!completed) {
-            process.destroy();
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
+        if (timeout != null) {
+            boolean completed = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            if (!completed) {
+                process.destroy();
+                if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                }
+                throw new IOException("process timed out after " + timeout + ": " + command);
             }
-            throw new IOException("process timed out after " + timeout + ": " + command);
+        } else {
+            process.waitFor();
         }
 
         try {

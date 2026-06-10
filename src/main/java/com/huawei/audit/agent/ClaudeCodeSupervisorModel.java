@@ -80,12 +80,11 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                             "--allowedTools", "Agent,Read,Glob,Grep",
                             "--disallowedTools",
                             "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch",
-                            "--add-dir", context.sourceRoot().toString(),
-                            "--max-turns", "80"
+                            "--add-dir", context.sourceRoot().toString()
                     ),
                     context.workingDirectory(),
                     Map.of("CLAUDE_CODE_ENTRYPOINT", "langchain4j-supervisor"),
-                    properties.timeout(),
+                    null,
                     prompt,
                     line -> consumeStreamEvent(context, finalResult, line)
             );
