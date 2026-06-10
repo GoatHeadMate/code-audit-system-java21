@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: code-audit-system-java21
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+  threads:
+    virtual:
+      enabled: true
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+
+server:
+  port: 8000
+
+audit:
+  workspace: ${AUDIT_WORKSPACE:workspace}
+  codeql-bin: ${CODEQL_BIN:codeql}
+  claude-bin: ${CLAUDE_BIN:claude}
+  max-concurrent-jobs: ${MAX_CONCURRENT_JOBS:2}
+  # Limits concurrent evidence preparation tasks; Claude uses one Supervisor process.
+  max-concurrent-hunters: ${MAX_CONCURRENT_HUNTERS:15}
+  hunter-timeout: ${HUNTER_TIMEOUT:30m}
+  query-lock-timeout: ${CODEQL_QUERY_LOCK_TIMEOUT:30m}
+  orchestrator:
+    enabled: ${INTELLIGENT_ORCHESTRATOR_ENABLED:true}
+    timeout: ${ORCHESTRATOR_TIMEOUT:3m}
+    max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}
+    max-additional-hunters: ${MAX_ADDITIONAL_HUNTERS:5}

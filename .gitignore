@@ -1,0 +1,6 @@
+target/
+workspace/
+.idea/
+*.iml
+*.log
+.claude/
