@@ -3,13 +3,11 @@
  * contains() 是子串匹配，攻击者可将白名单域名嵌入 URL 参数来绕过：
  *   http://evil.com?bypass=whitelisted.internal.com
  *
- * 修正（2026-06）：原版只匹配 MethodCall，漏掉方法引用形式。
- * 真实代码中常见 requestUrl::contains 方法引用（用于 stream().noneMatch()），
- * 这是 SSRF 白名单绕过的典型场景。现同时检测两种形式。
+ * 同时检测两种形式：
+ *   - 直接调用：requestUrl.contains(entry)
+ *   - 方法引用：requestUrl::contains（用于 stream().noneMatch/anyMatch）
  */
 import java
-
-// ── 辅助谓词 ──────────────────────────────────────────────────────────
 
 private predicate isSecurityContextMethod(Callable c) {
   c.getName().regexpMatch(
@@ -23,40 +21,41 @@ private predicate hasUrlVarName(Variable v) {
   )
 }
 
-// ── Case 1: 直接调用 requestUrl.contains(x) 或 x.contains(whitelistEntry) ──
-
-from MethodCall ma
+from Expr e, string pattern
 where
-  ma.getMethod().hasName("contains")
-  and ma.getMethod().getDeclaringType().hasQualifiedName("java.lang", "String")
-  and (
-    isSecurityContextMethod(ma.getEnclosingCallable())
-    or exists(Variable v |
-      v.getAnAccess() = ma.getQualifier() and hasUrlVarName(v)
+  // Case 1: 直接调用 requestUrl.contains(x) 或 x.contains(whitelistEntry)
+  (
+    e.(MethodCall).getMethod().hasName("contains")
+    and e.(MethodCall).getMethod().getDeclaringType()
+            .hasQualifiedName("java.lang", "String")
+    and (
+      isSecurityContextMethod(e.getEnclosingCallable())
+      or exists(Variable v |
+        v.getAnAccess() = e.(MethodCall).getQualifier() and hasUrlVarName(v)
+      )
+      or exists(Variable v |
+        v.getAnAccess() = e.(MethodCall).getArgument(0) and hasUrlVarName(v)
+      )
     )
-    or exists(Variable v |
-      v.getAnAccess() = ma.getArgument(0) and hasUrlVarName(v)
+    and pattern = "contains() 直接调用"
+  )
+  or
+  // Case 2: 方法引用 requestUrl::contains 传给 stream().noneMatch/anyMatch
+  (
+    e.(MemberRefExpr).getBaseName() = "contains"
+    and e.(MemberRefExpr).getQualifier().getType()
+            .(RefType).hasQualifiedName("java.lang", "String")
+    and (
+      isSecurityContextMethod(e.getEnclosingCallable())
+      or exists(Variable v |
+        v.getAnAccess() = e.(MemberRefExpr).getQualifier() and hasUrlVarName(v)
+      )
     )
+    and pattern = "contains() 方法引用（requestUrl::contains 等）"
   )
 select
-  ma.getLocation().getFile().getRelativePath()            as file,
-  ma.getLocation().getStartLine()                         as line,
-  ma.getEnclosingCallable().getName()                     as method_name,
-  ma.getEnclosingCallable().getDeclaringType().getName()  as class_name,
-  "contains() 直接调用"                                   as pattern
-
-union
-
-// ── Case 2: 方法引用 requestUrl::contains 传给 stream().noneMatch/anyMatch ──
-
-from MemberRefExpr mre
-where
-  mre.getMethod().hasName("contains")
-  and mre.getMethod().getDeclaringType().hasQualifiedName("java.lang", "String")
-  and isSecurityContextMethod(mre.getEnclosingCallable())
-select
-  mre.getLocation().getFile().getRelativePath()            as file,
-  mre.getLocation().getStartLine()                         as line,
-  mre.getEnclosingCallable().getName()                     as method_name,
-  mre.getEnclosingCallable().getDeclaringType().getName()  as class_name,
-  "contains() 方法引用（requestUrl::contains 等）"         as pattern
+  e.getLocation().getFile().getRelativePath()            as file,
+  e.getLocation().getStartLine()                         as line,
+  e.getEnclosingCallable().getName()                     as method_name,
+  e.getEnclosingCallable().getDeclaringType().getName()  as class_name,
+  pattern
