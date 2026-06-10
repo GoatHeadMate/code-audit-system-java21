@@ -22,8 +22,8 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class CodeqlService {
-    private static final int MAX_CHARS_PER_QUERY = 12_000;
-    private static final int MAX_TOTAL_EVIDENCE = 60_000;
+    private static final int MAX_CHARS_PER_QUERY = 8_000;
+    private static final int MAX_TOTAL_EVIDENCE = 30_000;
 
     private final AuditProperties properties;
     private final RuntimeExecutables executables;

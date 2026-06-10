@@ -100,8 +100,16 @@ public class SupervisorAgent {
                 4. Delegate no more than the configured maximum and never invent names.
                 5. Give each subagent its exact evidence file and source root.
                 6. Subagents must use only Read/Glob/Grep. Never request Bash or CodeQL.
-                7. Review returned findings, remove duplicates and obvious false positives.
-                8. Return one strict JSON object without Markdown:
+                7. If a subagent returns an agentId and says "use SendMessage to continue",
+                   you MUST use SendMessage with that agentId to resume it. Never create
+                   a new Agent for the same hunter — always continue the existing one.
+                8. Review returned findings, remove duplicates and obvious false positives.
+                9. Each finding MUST include these fields:
+                   rule_id, title, severity (HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
+                   vuln_type (e.g. SQL_INJECTION, SSRF, XSS), file_path, start_line,
+                   message, evidence, data_flow_path (array of strings).
+                   Omitting any of these fields makes the finding unparseable.
+                10. Return one strict JSON object without Markdown:
                    {
                      "selected_hunters": ["..."],
                      "rationale": "...",

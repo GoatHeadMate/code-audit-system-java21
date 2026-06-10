@@ -28,7 +28,6 @@ public class SubagentDefinitionService {
                     tools: Read, Glob, Grep
                     disallowedTools: Bash, Write, Edit, NotebookEdit, WebFetch, WebSearch
                     model: inherit
-                    maxTurns: 8
                     ---
 
                     You are the `%s` white-box audit subagent.

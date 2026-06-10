@@ -109,12 +109,13 @@ public class RuntimeExecutables {
 
     private List<String> candidates(String command) {
         List<String> candidates = new ArrayList<>();
-        candidates.add(command);
         if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")
                 && !command.contains(".")) {
+            // On Windows, prefer .exe/.cmd over the bare name (which may be a Unix shell script).
             candidates.add(command + ".exe");
             candidates.add(command + ".cmd");
         }
+        candidates.add(command);
         return candidates;
     }
 

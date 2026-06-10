@@ -77,7 +77,7 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                             "--output-format", "stream-json",
                             "--verbose",
                             "--permission-mode", "bypassPermissions",
-                            "--allowedTools", "Agent,Read,Glob,Grep",
+                            "--allowedTools", "Agent,SendMessage,Read,Glob,Grep",
                             "--disallowedTools",
                             "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch",
                             "--add-dir", context.sourceRoot().toString()
