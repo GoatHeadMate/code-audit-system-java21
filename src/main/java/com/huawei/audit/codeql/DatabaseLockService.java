@@ -24,9 +24,28 @@ public class DatabaseLockService {
         Files.createDirectories(lockRoot);
     }
 
+    /** Exclusive lock — use for database creation/writes. */
     public <T> T withDatabaseLock(
             Path database,
             Duration timeout,
+            Callable<T> action
+    ) throws Exception {
+        return withLock(database, timeout, false, action);
+    }
+
+    /** Shared lock — use for read-only query execution (allows concurrent readers). */
+    public <T> T withDatabaseReadLock(
+            Path database,
+            Duration timeout,
+            Callable<T> action
+    ) throws Exception {
+        return withLock(database, timeout, true, action);
+    }
+
+    private <T> T withLock(
+            Path database,
+            Duration timeout,
+            boolean shared,
             Callable<T> action
     ) throws Exception {
         Path lockPath = lockPath(database);
@@ -39,14 +58,14 @@ public class DatabaseLockService {
         )) {
             while (Instant.now().isBefore(deadline)) {
                 try {
-                    FileLock lock = channel.tryLock();
+                    FileLock lock = channel.tryLock(0, Long.MAX_VALUE, shared);
                     if (lock != null) {
                         try (lock) {
                             return action.call();
                         }
                     }
                 } catch (OverlappingFileLockException ignored) {
-                    // Another virtual thread in this JVM owns the database lock.
+                    // Another virtual thread in this JVM holds an incompatible lock.
                 }
                 Thread.sleep(250);
             }

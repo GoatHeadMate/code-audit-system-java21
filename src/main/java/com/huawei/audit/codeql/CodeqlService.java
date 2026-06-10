@@ -13,11 +13,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -31,6 +32,7 @@ public class CodeqlService {
     private final DatabaseLockService locks;
     private final JobLogBroker logs;
     private final ObjectMapper objectMapper;
+    private final ExecutorService executor;
     private final Path queryRoot;
 
     public CodeqlService(
@@ -39,7 +41,8 @@ public class CodeqlService {
             ProcessRunner processes,
             DatabaseLockService locks,
             JobLogBroker logs,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ExecutorService executor
     ) {
         this.properties = properties;
         this.executables = executables;
@@ -47,6 +50,7 @@ public class CodeqlService {
         this.locks = locks;
         this.logs = logs;
         this.objectMapper = objectMapper;
+        this.executor = executor;
         this.queryRoot = Path.of("codeql", "java").toAbsolutePath().normalize();
     }
 
@@ -129,60 +133,39 @@ public class CodeqlService {
                     .toList();
         }
 
-        Map<String, JsonNode> results = new LinkedHashMap<>();
-        Map<String, String> errors = new LinkedHashMap<>();
-        int totalChars = 0;
         Path outputDir = Files.createTempDirectory(
                 properties.absoluteWorkspace(),
                 hunter + "-"
         );
 
-        for (Path query : queries) {
-            String queryName = query.getFileName().toString();
-            Path bqrs = outputDir.resolve(queryName + ".bqrs");
-            Path json = outputDir.resolve(queryName + ".json");
-            try {
-                int exitCode = locks.withDatabaseLock(
-                        database,
-                        properties.queryLockTimeout(),
-                        () -> runQuery(job, hunter, database, query, bqrs)
-                );
-                if (exitCode != 0 || !Files.exists(bqrs)) {
-                    errors.put(queryName, "query failed with exit " + exitCode);
-                    continue;
-                }
+        // Launch all queries in parallel via virtual threads; each holds a shared read lock.
+        List<CompletableFuture<QueryOutcome>> futures = queries.stream()
+                .map(query -> CompletableFuture.supplyAsync(
+                        () -> runQueryTask(job, hunter, database, query, outputDir),
+                        executor
+                ))
+                .toList();
 
-                ProcessResult decode = processes.run(
-                        List.of(
-                                executables.codeql(),
-                                "bqrs", "decode", bqrs.toString(),
-                                "--format=json",
-                                "--output", json.toString()
-                        ),
-                        Path.of("").toAbsolutePath(),
-                        Map.of(),
-                        Duration.ofMinutes(5),
-                        line -> logs.publish(job, "[hunter:" + hunter + "][decode] " + line)
-                );
-                if (decode.exitCode() != 0 || !Files.exists(json)) {
-                    errors.put(queryName, "decode failed with exit " + decode.exitCode());
-                    continue;
-                }
-
-                JsonNode node = objectMapper.readTree(json.toFile());
+        // Aggregate in query-sorted order to keep evidence deterministic.
+        Map<String, JsonNode> results = new LinkedHashMap<>();
+        Map<String, String> errors = new LinkedHashMap<>();
+        int totalChars = 0;
+        for (int i = 0; i < queries.size(); i++) {
+            String queryName = queries.get(i).getFileName().toString();
+            QueryOutcome outcome = futures.get(i).join();
+            if (outcome.error() != null) {
+                errors.put(queryName, outcome.error());
+            } else {
                 int charCount = Math.min(
-                        objectMapper.writeValueAsString(node).length(),
+                        objectMapper.writeValueAsString(outcome.node()).length(),
                         MAX_CHARS_PER_QUERY
                 );
                 if (totalChars + charCount > MAX_TOTAL_EVIDENCE) {
                     errors.put(queryName, "skipped because evidence budget was exhausted");
-                    break;
+                } else {
+                    results.put(queryName, outcome.node());
+                    totalChars += charCount;
                 }
-                results.put(queryName, node);
-                totalChars += charCount;
-            } catch (Exception exception) {
-                errors.put(queryName, exception.getMessage());
-                logs.publish(job, "[hunter:" + hunter + "] query failed: " + exception.getMessage());
             }
         }
         return new Evidence(results, errors);
@@ -211,6 +194,51 @@ public class CodeqlService {
         );
         return result.exitCode();
     }
+
+    private QueryOutcome runQueryTask(
+            AuditJob job,
+            String hunter,
+            Path database,
+            Path query,
+            Path outputDir
+    ) {
+        String queryName = query.getFileName().toString();
+        Path bqrs = outputDir.resolve(queryName + ".bqrs");
+        Path json = outputDir.resolve(queryName + ".json");
+        try {
+            int exitCode = locks.withDatabaseReadLock(
+                    database,
+                    properties.queryLockTimeout(),
+                    () -> runQuery(job, hunter, database, query, bqrs)
+            );
+            if (exitCode != 0 || !Files.exists(bqrs)) {
+                return new QueryOutcome(null, "query failed with exit " + exitCode);
+            }
+
+            ProcessResult decode = processes.run(
+                    List.of(
+                            executables.codeql(),
+                            "bqrs", "decode", bqrs.toString(),
+                            "--format=json",
+                            "--output", json.toString()
+                    ),
+                    Path.of("").toAbsolutePath(),
+                    Map.of(),
+                    Duration.ofMinutes(5),
+                    line -> logs.publish(job, "[hunter:" + hunter + "][decode] " + line)
+            );
+            if (decode.exitCode() != 0 || !Files.exists(json)) {
+                return new QueryOutcome(null, "decode failed with exit " + decode.exitCode());
+            }
+
+            return new QueryOutcome(objectMapper.readTree(json.toFile()), null);
+        } catch (Exception exception) {
+            logs.publish(job, "[hunter:" + hunter + "] query failed: " + exception.getMessage());
+            return new QueryOutcome(null, exception.getMessage());
+        }
+    }
+
+    private record QueryOutcome(JsonNode node, String error) { }
 
     public record Evidence(Map<String, JsonNode> results, Map<String, String> errors) {
         public boolean allFailed() {
