@@ -1,28 +1,23 @@
 package com.huawei.audit.codeql;
 
-import com.huawei.audit.config.AuditProperties;
 import java.io.IOException;
-import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
-import java.nio.channels.OverlappingFileLockException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.HexFormat;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.springframework.stereotype.Component;
 
+/**
+ * Intra-JVM read/write lock for CodeQL databases.
+ * Multiple queries can hold concurrent read locks; database creation holds an exclusive write lock.
+ * FileLock was abandoned because the JVM prohibits overlapping locks from the same process,
+ * which serialized all parallel queries against the shared database.
+ */
 @Component
 public class DatabaseLockService {
-    private final Path lockRoot;
-
-    public DatabaseLockService(AuditProperties properties) throws IOException {
-        this.lockRoot = properties.absoluteWorkspace().resolve("query-locks");
-        Files.createDirectories(lockRoot);
-    }
+    private final ConcurrentHashMap<String, ReentrantReadWriteLock> locks = new ConcurrentHashMap<>();
 
     /** Exclusive lock — use for database creation/writes. */
     public <T> T withDatabaseLock(
@@ -30,7 +25,15 @@ public class DatabaseLockService {
             Duration timeout,
             Callable<T> action
     ) throws Exception {
-        return withLock(database, timeout, false, action);
+        ReentrantReadWriteLock lock = lockFor(database);
+        if (!lock.writeLock().tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+            throw new IOException("timed out waiting for database write lock: " + database);
+        }
+        try {
+            return action.call();
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     /** Shared lock — use for read-only query execution (allows concurrent readers). */
@@ -39,49 +42,19 @@ public class DatabaseLockService {
             Duration timeout,
             Callable<T> action
     ) throws Exception {
-        return withLock(database, timeout, true, action);
-    }
-
-    private <T> T withLock(
-            Path database,
-            Duration timeout,
-            boolean shared,
-            Callable<T> action
-    ) throws Exception {
-        Path lockPath = lockPath(database);
-        Instant deadline = Instant.now().plus(timeout);
-
-        try (FileChannel channel = FileChannel.open(
-                lockPath,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.READ,
-                StandardOpenOption.WRITE
-        )) {
-            while (Instant.now().isBefore(deadline)) {
-                try {
-                    FileLock lock = channel.tryLock(0, Long.MAX_VALUE, shared);
-                    if (lock != null) {
-                        try (lock) {
-                            return action.call();
-                        }
-                    }
-                } catch (OverlappingFileLockException ignored) {
-                    // Another virtual thread in this JVM holds an incompatible lock.
-                }
-                Thread.sleep(250);
-            }
+        ReentrantReadWriteLock lock = lockFor(database);
+        if (!lock.readLock().tryLock(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+            throw new IOException("timed out waiting for database read lock: " + database);
         }
-        throw new IOException("timed out waiting for CodeQL database lock: " + database);
-    }
-
-    private Path lockPath(Path database) {
-        String normalized = database.toAbsolutePath().normalize().toString().toLowerCase();
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(normalized.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return lockRoot.resolve(HexFormat.of().formatHex(digest, 0, 12) + ".lock");
-        } catch (java.security.NoSuchAlgorithmException exception) {
-            throw new IllegalStateException(exception);
+            return action.call();
+        } finally {
+            lock.readLock().unlock();
         }
+    }
+
+    private ReentrantReadWriteLock lockFor(Path database) {
+        String key = database.toAbsolutePath().normalize().toString().toLowerCase();
+        return locks.computeIfAbsent(key, k -> new ReentrantReadWriteLock());
     }
 }
