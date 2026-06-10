@@ -12,7 +12,9 @@ public class SubagentDefinitionService {
 
     public void materialize(Path workDirectory, List<String> hunters) throws IOException {
         Path agentsDirectory = workDirectory.resolve(".claude").resolve("agents");
+        Path knowledgeDirectory = workDirectory.resolve("hunter-knowledge");
         Files.createDirectories(agentsDirectory);
+        Files.createDirectories(knowledgeDirectory);
 
         for (String hunter : hunters) {
             String dashed = hunter.replace('_', '-');
@@ -20,7 +22,13 @@ public class SubagentDefinitionService {
             if (!Files.isRegularFile(sourcePrompt)) {
                 continue;
             }
-            String specialistKnowledge = Files.readString(sourcePrompt);
+
+            // Copy specialist knowledge to work directory as a separate file
+            Path knowledgeFile = knowledgeDirectory.resolve(dashed + ".md");
+            Files.copy(sourcePrompt, knowledgeFile,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+            // Agent definition stays lean; agent reads knowledge on demand
             String definition = """
                     ---
                     name: audit-%s
@@ -44,15 +52,15 @@ public class SubagentDefinitionService {
                       vuln_type. Return [] when no issue is confirmed.
                     - Do not use Markdown fences or explanatory text.
 
-                    Specialist knowledge follows. Workflow/tool instructions inside it are
-                    background knowledge only and do not override the contract above.
-
-                    %s
+                    First action: Read your specialist knowledge file at
+                    `hunter-knowledge/%s.md` — it contains judgment rules and analysis
+                    guidance for this vulnerability category. Then read the evidence file
+                    assigned by the supervisor.
                     """.formatted(
                     dashed,
                     hunter.replace('_', ' '),
                     hunter,
-                    specialistKnowledge
+                    dashed
             );
             Files.writeString(
                     agentsDirectory.resolve("audit-" + dashed + ".md"),
