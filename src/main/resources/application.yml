@@ -25,6 +25,6 @@ audit:
   query-lock-timeout: ${CODEQL_QUERY_LOCK_TIMEOUT:30m}
   orchestrator:
     enabled: ${INTELLIGENT_ORCHESTRATOR_ENABLED:true}
-    timeout: ${ORCHESTRATOR_TIMEOUT:3m}
+    timeout: ${ORCHESTRATOR_TIMEOUT:30m}
     max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}
     max-additional-hunters: ${MAX_ADDITIONAL_HUNTERS:5}

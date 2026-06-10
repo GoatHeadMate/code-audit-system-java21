@@ -81,7 +81,7 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                             "--disallowedTools",
                             "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch",
                             "--add-dir", context.sourceRoot().toString(),
-                            "--max-turns", "40"
+                            "--max-turns", "80"
                     ),
                     context.workingDirectory(),
                     Map.of("CLAUDE_CODE_ENTRYPOINT", "langchain4j-supervisor"),
