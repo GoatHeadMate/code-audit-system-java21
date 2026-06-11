@@ -66,8 +66,20 @@ public class FindingDeduplicator {
         if (value instanceof Number number) {
             return number.doubleValue();
         }
+        if (value != null) {
+            return switch (value.toString().toUpperCase()) {
+                case "HIGH" -> 0.90;
+                case "MEDIUM" -> 0.70;
+                case "LOW" -> 0.50;
+                default -> parseConfidence(value);
+            };
+        }
+        return 0.0;
+    }
+
+    private double parseConfidence(Object value) {
         try {
-            return value == null ? 0.0 : Double.parseDouble(value.toString());
+            return Double.parseDouble(value.toString());
         } catch (NumberFormatException ignored) {
             return 0.0;
         }

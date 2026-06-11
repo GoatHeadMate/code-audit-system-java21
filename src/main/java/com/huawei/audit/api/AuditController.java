@@ -132,10 +132,12 @@ public class AuditController {
                 "status", "ok",
                 "jobs", jobs.list().size(),
                 "codeql_available", executables.codeqlAvailable(),
+                "codeql_required", false,
                 "claude_available", executables.claudeAvailable(),
                 "intelligent_orchestrator", orchestratorProperties.enabled(),
                 "agent_framework", "langchain4j+langgraph4j",
                 "agent_topology", "one-supervisor+native-subagents",
+                "scan_strategy", "candidate-path-whitebox",
                 "claude_processes_per_job", 1
         );
     }

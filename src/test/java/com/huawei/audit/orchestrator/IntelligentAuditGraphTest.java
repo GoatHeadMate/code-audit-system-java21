@@ -26,9 +26,12 @@ class IntelligentAuditGraphTest {
         job.workDir(Path.of("workspace", "audit_graph123"));
 
         when(evidence.prepare(any(), any(), any())).thenReturn(
-                Map.of(
-                        "sql_injection", "evidence/sql_injection.json",
-                        "ssrf", "evidence/ssrf.json"
+                new EvidencePreparationService.PreparationResult(
+                        Map.of(
+                                "sql_injection", "evidence/sql_injection.json",
+                                "ssrf", "evidence/ssrf.json"
+                        ),
+                        Map.of("candidate_paths", 2)
                 )
         );
         when(supervisor.run(any(), any(), any(), any(), any())).thenReturn(
@@ -53,7 +56,6 @@ class IntelligentAuditGraphTest {
 
         OrchestratorAgentState result = graph.invoke(
                 job,
-                Path.of("db"),
                 Path.of("source"),
                 Map.of("primary_language", "java"),
                 List.of("sql_injection", "ssrf")
@@ -63,6 +65,7 @@ class IntelligentAuditGraphTest {
         assertThat(result.taskSummary())
                 .containsEntry("total_hunters", 2)
                 .containsEntry("claude_code_processes", 1)
+                .containsKey("analysis_coverage")
                 .containsEntry(
                         "subagent_mode",
                         "native-claude-code-agent-tool"

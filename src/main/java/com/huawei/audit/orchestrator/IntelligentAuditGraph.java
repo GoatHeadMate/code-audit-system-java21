@@ -54,7 +54,6 @@ public class IntelligentAuditGraph {
 
     public OrchestratorAgentState invoke(
             AuditJob job,
-            Path database,
             Path sourceRoot,
             Map<String, Object> techProfile,
             List<String> candidates
@@ -62,7 +61,7 @@ public class IntelligentAuditGraph {
         String contextId = UUID.randomUUID().toString();
         contexts.put(
                 contextId,
-                new ExecutionContext(job, database, sourceRoot, techProfile)
+                new ExecutionContext(job, sourceRoot, techProfile)
         );
         try {
             Map<String, Object> initialState = Map.of(
@@ -99,19 +98,20 @@ public class IntelligentAuditGraph {
         ExecutionContext context = context(state);
         logs.publish(
                 context.job(),
-                "[langgraph4j] preparing CodeQL evidence for native subagents"
+                "[langgraph4j] preparing HTTP interface inventory for native subagents"
         );
         subagentDefinitions.materialize(
                 context.job().workDir(),
                 state.candidates()
         );
-        Map<String, String> manifest = evidencePreparation.prepare(
+        var preparation = evidencePreparation.prepare(
                 context.job(),
-                context.database(),
+                context.sourceRoot(),
                 state.candidates()
         );
         return Map.of(
-                "evidence_manifest", manifest
+                "evidence_manifest", preparation.manifest(),
+                "analysis_summary", preparation.analysisSummary()
         );
     }
 
@@ -162,6 +162,9 @@ public class IntelligentAuditGraph {
         );
         summary.put("claude_code_processes", 1);
         summary.put("subagent_mode", "native-claude-code-agent-tool");
+        summary.put("scan_strategy", "candidate-path-whitebox");
+        summary.put("codeql_used", false);
+        summary.put("analysis_coverage", state.analysisSummary());
         return Map.of(
                 "final_findings", finalFindings,
                 "stats", deduplicator.statistics(finalFindings),
@@ -181,7 +184,6 @@ public class IntelligentAuditGraph {
 
     private record ExecutionContext(
             AuditJob job,
-            Path database,
             Path sourceRoot,
             Map<String, Object> techProfile
     ) { }

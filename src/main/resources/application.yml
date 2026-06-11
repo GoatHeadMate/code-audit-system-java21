@@ -23,6 +23,8 @@ audit:
   max-concurrent-hunters: ${MAX_CONCURRENT_HUNTERS:15}
   hunter-timeout: ${HUNTER_TIMEOUT:30m}
   query-lock-timeout: ${CODEQL_QUERY_LOCK_TIMEOUT:30m}
+  codeql-parallelism: ${CODEQL_PARALLELISM:4}
+  codeql-ram-mb: ${CODEQL_RAM_MB:2048}
   orchestrator:
     enabled: ${INTELLIGENT_ORCHESTRATOR_ENABLED:true}
     max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}

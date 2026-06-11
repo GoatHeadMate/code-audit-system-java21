@@ -12,7 +12,9 @@ public record AuditProperties(
         int maxConcurrentJobs,
         int maxConcurrentHunters,
         Duration hunterTimeout,
-        Duration queryLockTimeout
+        Duration queryLockTimeout,
+        int codeqlParallelism,
+        int codeqlRamMb
 ) {
     public AuditProperties {
         workspace = workspace == null ? Path.of("workspace") : workspace;
@@ -24,6 +26,8 @@ public record AuditProperties(
         queryLockTimeout = queryLockTimeout == null
                 ? Duration.ofMinutes(30)
                 : queryLockTimeout;
+        codeqlParallelism = clamp(codeqlParallelism, 1, 32, 4);
+        codeqlRamMb = clamp(codeqlRamMb, 2048, 16384, 2048);
     }
 
     public Path absoluteWorkspace() {

@@ -2,7 +2,7 @@ package com.huawei.audit.codeql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.huawei.audit.config.AuditProperties;
+import com.huawei.audit.codeql.impl.DatabaseLockServiceImpl;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
@@ -18,16 +18,16 @@ class DatabaseLockServiceTest {
 
     @Test
     void serializesQueriesForTheSameDatabase() throws Exception {
-        DatabaseLockService locks = new DatabaseLockService(properties());
+        DatabaseLockService locks = new DatabaseLockServiceImpl();
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maxActive = new AtomicInteger();
         CountDownLatch start = new CountDownLatch(1);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            var first = executor.submit(() -> lockedWork(
+            var first = executor.submit(() -> lockedQuery(
                     locks, tempDir.resolve("db"), start, active, maxActive
             ));
-            var second = executor.submit(() -> lockedWork(
+            var second = executor.submit(() -> lockedQuery(
                     locks, tempDir.resolve("db"), start, active, maxActive
             ));
             start.countDown();
@@ -40,16 +40,16 @@ class DatabaseLockServiceTest {
 
     @Test
     void allowsDifferentDatabasesToRunConcurrently() throws Exception {
-        DatabaseLockService locks = new DatabaseLockService(properties());
+        DatabaseLockService locks = new DatabaseLockServiceImpl();
         AtomicInteger active = new AtomicInteger();
         AtomicInteger maxActive = new AtomicInteger();
         CountDownLatch start = new CountDownLatch(1);
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            var first = executor.submit(() -> lockedWork(
+            var first = executor.submit(() -> lockedQuery(
                     locks, tempDir.resolve("db-one"), start, active, maxActive
             ));
-            var second = executor.submit(() -> lockedWork(
+            var second = executor.submit(() -> lockedQuery(
                     locks, tempDir.resolve("db-two"), start, active, maxActive
             ));
             start.countDown();
@@ -60,7 +60,7 @@ class DatabaseLockServiceTest {
         assertThat(maxActive.get()).isGreaterThanOrEqualTo(2);
     }
 
-    private Void lockedWork(
+    private Void lockedQuery(
             DatabaseLockService locks,
             Path database,
             CountDownLatch start,
@@ -68,24 +68,12 @@ class DatabaseLockServiceTest {
             AtomicInteger maxActive
     ) throws Exception {
         start.await();
-        return locks.withDatabaseLock(database, Duration.ofSeconds(5), () -> {
+        return locks.withDatabaseReadLock(database, Duration.ofSeconds(5), () -> {
             int current = active.incrementAndGet();
             maxActive.accumulateAndGet(current, Math::max);
             Thread.sleep(200);
             active.decrementAndGet();
             return null;
         });
-    }
-
-    private AuditProperties properties() {
-        return new AuditProperties(
-                tempDir,
-                "codeql",
-                "claude",
-                2,
-                15,
-                Duration.ofMinutes(30),
-                Duration.ofMinutes(30)
-        );
     }
 }

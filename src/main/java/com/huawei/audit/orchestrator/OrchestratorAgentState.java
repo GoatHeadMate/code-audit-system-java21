@@ -29,6 +29,11 @@ public final class OrchestratorAgentState extends AgentState {
     }
 
     @SuppressWarnings("unchecked")
+    public Map<String, Object> analysisSummary() {
+        return value("analysis_summary", Map.of());
+    }
+
+    @SuppressWarnings("unchecked")
     public List<Map<String, Object>> rawFindings() {
         return value("raw_findings", List.of());
     }

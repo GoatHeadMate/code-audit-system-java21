@@ -1,6 +1,7 @@
 # SSTI（服务端模板注入）判断知识
 
 Java 中高危场景：
+- **MVEL 注入**：`MVEL.eval()`、`MVEL.executeExpression()` 或攻击者可控的编译表达式执行
 - **SpEL 注入**：`parser.parseExpression(userInput).getValue()` — 可 RCE
 - **FreeMarker 注入**：`Template.process(userInput, ...)` — 可调用反射
 - **Thymeleaf 片段注入**：`~{userInput}`（CVE-2021-43466）
@@ -17,6 +18,7 @@ Java 中高危场景：
 | 场景 | 判定 | 严重度 |
 |------|------|--------|
 | 用户输入 → SpEL parseExpression() | **漏洞** | CRITICAL |
+| HTTP 写入表达式字段 → 数据库存储 → 定时任务读取并执行 MVEL | **漏洞** | CRITICAL |
 | 用户输入作为 FreeMarker 模板内容 | **漏洞** | CRITICAL |
 | 用户输入仅作为模板变量（数据） | **安全** | — |
 | 使用固定模板名称加载 | **安全** | — |

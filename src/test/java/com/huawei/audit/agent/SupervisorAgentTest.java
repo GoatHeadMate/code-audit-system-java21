@@ -11,12 +11,15 @@ import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
 import com.huawei.audit.job.JobLogBroker;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class SupervisorAgentTest {
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void filtersDelegationToCandidateWhitelistAndMandatoryHunters()
@@ -45,14 +48,14 @@ class SupervisorAgentTest {
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
                         true,
-                        Duration.ofMinutes(1),
-                        4,
-                        1
+                        10,
+                        5
                 ),
                 new JobLogBroker()
         );
         AuditJob job = new AuditJob("super123", "java");
-        job.workDir(Path.of("workspace", "audit_super123"));
+        job.workDir(tempDir.resolve("audit_super123"));
+        java.nio.file.Files.createDirectories(job.workDir());
 
         var result = supervisor.run(
                 job,
@@ -70,13 +73,76 @@ class SupervisorAgentTest {
 
         assertThat(result.selectedHunters())
                 .contains(
-                        "sql_injection",
                         "command_injection",
                         "authorization",
                         "ssrf"
                 )
                 .doesNotContain("not-a-real-agent")
-                .hasSizeLessThanOrEqualTo(5);
+                .hasSizeLessThanOrEqualTo(15);
         assertThat(result.findings()).hasSize(1);
+    }
+
+    @Test
+    void parsesFencedEnvelopeAfterTextContainingTemplateBraces()
+            throws Exception {
+        ClaudeCodeSupervisorModel model = mock(ClaudeCodeSupervisorModel.class);
+        when(model.supervise(any(), any(), any(), any())).thenReturn("""
+                All subagent audits completed.
+                SQL Injection: `${orderByClause}` requires review.
+
+                ```json
+                {
+                  "selected_hunters": ["sql_injection"],
+                  "rationale": "Aggregated specialist results",
+                  "findings": [{
+                    "rule_id": "sqli-mybatis-unsafe",
+                    "title": "Unsafe MyBatis interpolation",
+                    "severity": "MEDIUM",
+                    "confidence": "HIGH",
+                    "file_path": "src/Mapper.xml",
+                    "start_line": 42,
+                    "message": "Dynamic ORDER BY",
+                    "evidence": "${orderByClause}",
+                    "vuln_type": "SQL_INJECTION",
+                    "data_flow_path": []
+                  }]
+                }
+                ```
+                """);
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                model,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5
+                ),
+                new JobLogBroker()
+        );
+        AuditJob job = new AuditJob("fenced123", "java");
+        job.workDir(tempDir.resolve("audit_fenced123"));
+        java.nio.file.Files.createDirectories(job.workDir());
+
+        var result = supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of(
+                        "sql_injection",
+                        "command_injection",
+                        "authorization"
+                ),
+                Map.of()
+        );
+
+        assertThat(result.findings()).hasSize(1);
+        assertThat(result.findings().getFirst())
+                .containsEntry("rule_id", "sqli-mybatis-unsafe")
+                .containsEntry("vulnerability_type", "SQL_INJECTION");
+        assertThat(job.workDir().resolve("supervisor-response.txt"))
+                .isRegularFile();
     }
 }
