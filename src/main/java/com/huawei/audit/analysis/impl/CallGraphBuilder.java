@@ -47,11 +47,18 @@ final class CallGraphBuilder {
         List<UnresolvedCall> unresolved = new ArrayList<>();
         Map<String, List<String>> referencesByClass =
                 methodReferencesByClass(index);
+        Map<String, Set<String>> implementations =
+                ImplementationIndex.transitive(index.implementations());
 
         for (MethodNode method : index.methods()) {
             List<CallEdge> edges = new ArrayList<>();
             for (CallSite call : method.calls()) {
-                List<ResolvedTarget> targets = resolveTargets(method, call, index);
+                List<ResolvedTarget> targets = resolveTargets(
+                        method,
+                        call,
+                        index,
+                        implementations
+                );
                 List<ResolvedTarget> callbacks = resolveCallbacks(
                         method,
                         call,
@@ -93,7 +100,8 @@ final class CallGraphBuilder {
     private List<ResolvedTarget> resolveTargets(
             MethodNode caller,
             CallSite call,
-            SourceIndex index
+            SourceIndex index,
+            Map<String, Set<String>> implementations
     ) {
         LinkedHashMap<String, ResolvedTarget> targets = new LinkedHashMap<>();
         String receiverType = call.receiverType();
@@ -106,7 +114,7 @@ final class CallGraphBuilder {
                     call,
                     "receiver-type"
             );
-            for (String implementation : index.implementations()
+            for (String implementation : implementations
                     .getOrDefault(
                             AnalysisTextUtils.simpleName(receiverType),
                             Set.of()
@@ -119,13 +127,6 @@ final class CallGraphBuilder {
                         "interface-implementation"
                 );
             }
-            addImplementationTargets(
-                    targets,
-                    index,
-                    receiverType,
-                    call,
-                    new LinkedHashSet<>()
-            );
         }
 
         if (call.receiver().isBlank()
@@ -235,36 +236,6 @@ final class CallGraphBuilder {
         );
         return FUNCTIONAL_TYPES.contains(receiverType)
                 || call.receiver().contains("(");
-    }
-
-    private void addImplementationTargets(
-            Map<String, ResolvedTarget> targets,
-            SourceIndex index,
-            String parent,
-            CallSite call,
-            Set<String> visited
-    ) {
-        String simpleParent = AnalysisTextUtils.simpleName(parent);
-        if (!visited.add(simpleParent)) {
-            return;
-        }
-        for (String implementation : index.implementations()
-                .getOrDefault(simpleParent, Set.of())) {
-            addClassTargets(
-                    targets,
-                    index,
-                    implementation,
-                    call,
-                    "interface-implementation"
-            );
-            addImplementationTargets(
-                    targets,
-                    index,
-                    implementation,
-                    call,
-                    visited
-            );
-        }
     }
 
     private void addCallbackMethod(

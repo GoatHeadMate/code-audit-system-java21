@@ -12,7 +12,9 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 final class StorageWritePathFinder {
     private static final int MAX_PATH_DEPTH = 12;
@@ -25,12 +27,29 @@ final class StorageWritePathFinder {
     ) {
         List<StorageWritePath> paths = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+        Set<String> writeMethods = index.storageAccesses().stream()
+                .filter(access -> "WRITE".equals(access.kind()))
+                .map(StorageAccess::methodId)
+                .collect(Collectors.toSet());
+        Map<String, Integer> writeDistances = ReverseReachability.distances(
+                graph,
+                writeMethods,
+                MAX_PATH_DEPTH
+        );
         for (EntryPoint entryPoint : entryPoints) {
             if (!isExternalWriteEntry(entryPoint)
-                    || entryPoint.methodId().isBlank()) {
+                    || entryPoint.methodId().isBlank()
+                    || !writeDistances.containsKey(entryPoint.methodId())) {
                 continue;
             }
-            walk(entryPoint, index, graph, paths, seen);
+            walk(
+                    entryPoint,
+                    index,
+                    graph,
+                    writeDistances,
+                    paths,
+                    seen
+            );
             if (paths.size() >= MAX_PATHS) {
                 break;
             }
@@ -47,6 +66,7 @@ final class StorageWritePathFinder {
             EntryPoint entryPoint,
             SourceIndex index,
             CallGraph graph,
+            Map<String, Integer> writeDistances,
             List<StorageWritePath> paths,
             Set<String> seen
     ) {
@@ -75,14 +95,15 @@ final class StorageWritePathFinder {
                     ));
                 }
             }
-            expand(queue, state, graph);
+            expand(queue, state, graph, writeDistances);
         }
     }
 
     private void expand(
             Deque<PathState> queue,
             PathState state,
-            CallGraph graph
+            CallGraph graph,
+            Map<String, Integer> writeDistances
     ) {
         if (state.edges().size() >= MAX_PATH_DEPTH) {
             return;
@@ -90,6 +111,12 @@ final class StorageWritePathFinder {
         for (CallEdge edge : graph.outgoing()
                 .getOrDefault(state.methodId(), List.of())) {
             if (state.visited().contains(edge.toMethodId())) {
+                continue;
+            }
+            int nextDepth = state.edges().size() + 1;
+            int remaining = MAX_PATH_DEPTH - nextDepth;
+            Integer distance = writeDistances.get(edge.toMethodId());
+            if (distance == null || distance > remaining) {
                 continue;
             }
             List<String> methodPath = new ArrayList<>(state.methodPath());

@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -23,6 +24,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final WhiteBoxAnalysisService analysisService;
     private final ObjectMapper objectMapper;
     private final JobLogBroker logs;
+    private final Semaphore analysisSlot = new Semaphore(1, true);
 
     public EvidencePreparationServiceImpl(
             WhiteBoxAnalysisService analysisService,
@@ -46,11 +48,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         Files.createDirectories(analysisDirectory);
         Files.createDirectories(packageDirectory);
 
-        logs.publish(
-                job,
-                "[whitebox] indexing entrypoints, methods, calls and dangerous sinks"
-        );
-        var analysis = analysisService.analyze(sourceRoot);
+        var analysis = runWhiteBoxAnalysis(job, sourceRoot);
         writeJson(
                 analysisDirectory.resolve("entrypoints.json"),
                 analysis.entryPoints()
@@ -220,6 +218,28 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                 Map.copyOf(manifest),
                 EvidencePackagePolicy.coverageSummary(coverage)
         );
+    }
+
+    private WhiteBoxAnalysisService.AnalysisResult runWhiteBoxAnalysis(
+            AuditJob job,
+            Path sourceRoot
+    ) throws Exception {
+        if (!analysisSlot.tryAcquire()) {
+            logs.publish(
+                    job,
+                    "[whitebox] waiting for the active analysis to release memory"
+            );
+            analysisSlot.acquire();
+        }
+        try {
+            logs.publish(
+                    job,
+                    "[whitebox] indexing source in bounded batches"
+            );
+            return analysisService.analyze(sourceRoot);
+        } finally {
+            analysisSlot.release();
+        }
     }
 
     private List<String> writeChunks(

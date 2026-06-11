@@ -21,6 +21,9 @@ import javax.tools.StandardJavaFileManager;
 import javax.tools.ToolProvider;
 
 final class JavaSourceIndexer {
+    private static final int SOURCE_BATCH_SIZE = 128;
+    private static final int MAX_PARSE_ERRORS = 1_000;
+
     SourceIndex build(Path sourceRoot) throws Exception {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
@@ -45,7 +48,35 @@ final class JavaSourceIndexer {
         List<Sink> sinks = new ArrayList<>();
         Map<String, Set<String>> implementations = new LinkedHashMap<>();
         List<String> parseErrors = new ArrayList<>();
+        AtomicInteger methodSequence = new AtomicInteger();
 
+        for (int start = 0; start < sourceFiles.size();
+                start += SOURCE_BATCH_SIZE) {
+            int end = Math.min(start + SOURCE_BATCH_SIZE, sourceFiles.size());
+            indexBatch(
+                    compiler,
+                    sourceRoot,
+                    sourceFiles.subList(start, end),
+                    methods,
+                    sinks,
+                    implementations,
+                    parseErrors,
+                    methodSequence
+            );
+        }
+        return SourceIndex.create(methods, sinks, implementations, parseErrors);
+    }
+
+    private void indexBatch(
+            JavaCompiler compiler,
+            Path sourceRoot,
+            List<Path> sourceFiles,
+            List<MethodNode> methods,
+            List<Sink> sinks,
+            Map<String, Set<String>> implementations,
+            List<String> parseErrors,
+            AtomicInteger methodSequence
+    ) throws Exception {
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(
                 null,
                 Locale.ROOT,
@@ -54,29 +85,50 @@ final class JavaSourceIndexer {
             JavacTask task = (JavacTask) compiler.getTask(
                     null,
                     fileManager,
-                    diagnostic -> parseErrors.add(diagnostic.toString()),
+                    diagnostic -> {
+                        if (parseErrors.size() < MAX_PARSE_ERRORS) {
+                            parseErrors.add(diagnostic.toString());
+                        }
+                    },
                     List.of("-proc:none", "-Xlint:none"),
                     null,
                     fileManager.getJavaFileObjectsFromPaths(sourceFiles)
             );
             Iterable<? extends CompilationUnitTree> units = task.parse();
             SourcePositions positions = Trees.instance(task).getSourcePositions();
-            AtomicInteger methodSequence = new AtomicInteger();
-
             for (CompilationUnitTree unit : units) {
-                Path file = Path.of(unit.getSourceFile().toUri());
-                new CompilationUnitIndexer(
+                indexUnit(
+                        sourceRoot,
                         unit,
                         positions,
-                        AnalysisTextUtils.relativePath(sourceRoot, file),
-                        Files.readString(file),
                         methods,
                         sinks,
                         implementations,
                         methodSequence
-                ).scan(unit, null);
+                );
             }
         }
-        return SourceIndex.create(methods, sinks, implementations, parseErrors);
+    }
+
+    private void indexUnit(
+            Path sourceRoot,
+            CompilationUnitTree unit,
+            SourcePositions positions,
+            List<MethodNode> methods,
+            List<Sink> sinks,
+            Map<String, Set<String>> implementations,
+            AtomicInteger methodSequence
+    ) throws Exception {
+        Path file = Path.of(unit.getSourceFile().toUri());
+        new CompilationUnitIndexer(
+                unit,
+                positions,
+                AnalysisTextUtils.relativePath(sourceRoot, file),
+                Files.readString(file),
+                methods,
+                sinks,
+                implementations,
+                methodSequence
+        ).scan(unit, null);
     }
 }

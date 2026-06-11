@@ -34,10 +34,16 @@ final class CandidatePathFinder {
                 ));
         List<CandidatePath> candidates = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+        Map<String, Integer> sinkDistances = ReverseReachability.distances(
+                graph,
+                sinksByMethod.keySet(),
+                MAX_PATH_DEPTH
+        );
         int sequence = 1;
 
         for (EntryPoint entryPoint : entryPoints) {
-            if (entryPoint.methodId().isBlank()) {
+            if (entryPoint.methodId().isBlank()
+                    || !sinkDistances.containsKey(entryPoint.methodId())) {
                 continue;
             }
             Deque<PathState> queue = new ArrayDeque<>();
@@ -68,7 +74,7 @@ final class CandidatePathFinder {
                         ));
                     }
                 }
-                expand(queue, state, graph);
+                expand(queue, state, graph, sinkDistances);
             }
         }
         return List.copyOf(candidates);
@@ -77,7 +83,8 @@ final class CandidatePathFinder {
     private void expand(
             Deque<PathState> queue,
             PathState state,
-            CallGraph graph
+            CallGraph graph,
+            Map<String, Integer> sinkDistances
     ) {
         if (state.edges().size() >= MAX_PATH_DEPTH) {
             return;
@@ -85,6 +92,12 @@ final class CandidatePathFinder {
         for (CallEdge edge : graph.outgoing()
                 .getOrDefault(state.methodId(), List.of())) {
             if (state.visited().contains(edge.toMethodId())) {
+                continue;
+            }
+            int nextDepth = state.edges().size() + 1;
+            int remaining = MAX_PATH_DEPTH - nextDepth;
+            Integer distance = sinkDistances.get(edge.toMethodId());
+            if (distance == null || distance > remaining) {
                 continue;
             }
             List<String> methodPath = new ArrayList<>(state.methodPath());
