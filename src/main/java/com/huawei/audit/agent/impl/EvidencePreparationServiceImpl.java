@@ -5,8 +5,10 @@ import com.huawei.audit.agent.EvidencePreparationService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CandidatePath;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StoredCandidate;
+import com.huawei.audit.config.AuditProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -25,15 +28,18 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final ObjectMapper objectMapper;
     private final JobLogBroker logs;
     private final Semaphore analysisSlot = new Semaphore(1, true);
+    private final long analysisTimeoutMs;
 
     public EvidencePreparationServiceImpl(
             WhiteBoxAnalysisService analysisService,
             ObjectMapper objectMapper,
-            JobLogBroker logs
+            JobLogBroker logs,
+            AuditProperties properties
     ) {
         this.analysisService = analysisService;
         this.objectMapper = objectMapper;
         this.logs = logs;
+        this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
     }
 
     @Override
@@ -225,11 +231,10 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             Path sourceRoot
     ) throws Exception {
         if (!analysisSlot.tryAcquire()) {
-            logs.publish(
-                    job,
-                    "[whitebox] waiting for the active analysis to release memory"
-            );
-            analysisSlot.acquire();
+            logs.publish(job, "[whitebox] waiting for the active analysis to release memory");
+            if (!analysisSlot.tryAcquire(analysisTimeoutMs, TimeUnit.MILLISECONDS)) {
+                throw new IOException("timed out waiting for white-box analysis slot");
+            }
         }
         try {
             logs.publish(

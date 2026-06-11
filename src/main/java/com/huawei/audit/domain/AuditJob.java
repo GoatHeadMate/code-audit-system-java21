@@ -4,13 +4,14 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.ArrayDeque;
 
 public final class AuditJob {
     private final String jobId;
     private final String lang;
     private final Instant createdAt;
-    private final CopyOnWriteArrayList<String> logHistory = new CopyOnWriteArrayList<>();
+    private static final int MAX_LOG_LINES = 2_000;
+    private final ArrayDeque<String> logHistory = new ArrayDeque<>();
 
     private volatile JobStatus status = JobStatus.PENDING;
     private volatile Instant updatedAt;
@@ -45,9 +46,11 @@ public final class AuditJob {
     }
 
     public void appendLog(String line) {
-        logHistory.add(line);
-        if (logHistory.size() > 2_000) {
-            logHistory.remove(0);
+        synchronized (logHistory) {
+            if (logHistory.size() >= MAX_LOG_LINES) {
+                logHistory.removeFirst();
+            }
+            logHistory.addLast(line);
         }
     }
 
@@ -67,7 +70,11 @@ public final class AuditJob {
     public Map<String, Object> stats() { return stats; }
     public Map<String, Object> techProfile() { return techProfile; }
     public Map<String, Object> taskSummary() { return taskSummary; }
-    public List<String> logHistory() { return List.copyOf(logHistory); }
+    public List<String> logHistory() {
+        synchronized (logHistory) {
+            return List.copyOf(logHistory);
+        }
+    }
     public boolean logDone() { return logDone; }
     public int findingsCount() { return findings.size(); }
 

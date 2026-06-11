@@ -5,17 +5,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.audit.agent.impl.EvidencePreparationServiceImpl;
 import com.huawei.audit.analysis.impl.WhiteBoxAnalysisServiceImpl;
+import com.huawei.audit.config.AuditProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.source.AsyncEntryPointDiscoverer;
 import com.huawei.audit.source.HttpEndpointScanner;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class EvidencePreparationServiceTest {
+    private static final AuditProperties TEST_PROPERTIES = new AuditProperties(
+            Path.of("workspace"), "codeql", "claude", 2, 15,
+            Duration.ofMinutes(30), Duration.ofMinutes(30), 4, 2048
+    );
 
     @TempDir
     Path tempDir;
@@ -40,7 +46,8 @@ class EvidencePreparationServiceTest {
         EvidencePreparationService service = new EvidencePreparationServiceImpl(
                 new WhiteBoxAnalysisServiceImpl(List.of(endpoints)),
                 new ObjectMapper(),
-                new JobLogBroker()
+                new JobLogBroker(),
+                TEST_PROPERTIES
         );
         AuditJob job = new AuditJob("evidence1", "java");
         job.workDir(tempDir.resolve("audit_evidence1"));
@@ -110,7 +117,8 @@ class EvidencePreparationServiceTest {
                         new AsyncEntryPointDiscoverer()
                 )),
                 mapper,
-                new JobLogBroker()
+                new JobLogBroker(),
+                TEST_PROPERTIES
         );
         AuditJob job = new AuditJob("stored1", "java");
         job.workDir(tempDir.resolve("audit_stored1"));

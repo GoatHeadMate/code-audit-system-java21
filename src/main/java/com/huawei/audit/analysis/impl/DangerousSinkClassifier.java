@@ -56,8 +56,8 @@ final class DangerousSinkClassifier {
         if ("transferTo".equals(method)) {
             return match("FILE_WRITE", expression);
         }
-        if ("openConnection".equals(method)
-                || Set.of("send", "sendAsync", "exchange").contains(method)
+        if (("openConnection".equals(method)
+                || Set.of("send", "sendAsync", "exchange").contains(method))
                 && (lowerExpression.contains("http")
                 || lowerExpression.contains("resttemplate"))) {
             return match("OUTBOUND_HTTP", expression);
