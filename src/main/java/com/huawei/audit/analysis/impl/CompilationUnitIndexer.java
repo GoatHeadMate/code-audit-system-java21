@@ -2,6 +2,7 @@ package com.huawei.audit.analysis.impl;
 
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.MethodNode;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
+import com.sun.source.tree.AnnotationTree;
 import com.sun.source.tree.ClassTree;
 import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.MethodTree;
@@ -68,7 +69,17 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
         if (tree.getExtendsClause() != null) {
             registerImplementation(tree.getExtendsClause().toString(), className);
         }
-        classes.push(new ClassContext(className, Map.copyOf(fieldTypes)));
+        classes.push(new ClassContext(
+                className,
+                Map.copyOf(fieldTypes),
+                hasAnnotation(
+                        tree.getModifiers().getAnnotations(),
+                        "Endpoint",
+                        "WebEndpoint",
+                        "ControllerEndpoint",
+                        "RestControllerEndpoint"
+                )
+        ));
         super.visitClass(tree, unused);
         classes.pop();
         return null;
@@ -102,6 +113,22 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                 variableTypes,
                 sinks
         );
+        if (owner.actuatorEndpoint() && hasAnnotation(
+                tree.getModifiers().getAnnotations(),
+                "ReadOperation",
+                "WriteOperation",
+                "DeleteOperation"
+        )) {
+            sinks.add(new Sink(
+                    "sink-" + (sinks.size() + 1),
+                    "ACTUATOR_ENDPOINT",
+                    "Spring Actuator operation",
+                    methodId,
+                    filePath,
+                    startLine,
+                    sourceText(tree, 500)
+            ));
+        }
         body.scan(tree.getBody(), null);
         methods.add(new MethodNode(
                 methodId,
@@ -155,8 +182,21 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
         ).add(child);
     }
 
+    private boolean hasAnnotation(
+            List<? extends AnnotationTree> annotations,
+            String... names
+    ) {
+        Set<String> accepted = Set.of(names);
+        return annotations.stream()
+                .map(annotation -> AnalysisTextUtils.simpleName(
+                        annotation.getAnnotationType().toString()
+                ))
+                .anyMatch(accepted::contains);
+    }
+
     private record ClassContext(
             String className,
-            Map<String, String> fieldTypes
+            Map<String, String> fieldTypes,
+            boolean actuatorEndpoint
     ) { }
 }

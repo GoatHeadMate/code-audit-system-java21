@@ -68,7 +68,8 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
         String relativePath = sourceRoot.relativize(file)
                 .toString()
                 .replace('\\', '/');
-        String framework = detectFramework(lines);
+        String detectedFramework = detectFramework(lines);
+        String framework = detectedFramework;
         String className = "";
         List<String> classPaths = List.of("");
         List<HttpAnnotationParser.AnnotationRef> pending = new ArrayList<>();
@@ -86,11 +87,34 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
             Matcher classMatcher = CLASS_DECLARATION.matcher(trimmed);
             if (classMatcher.find()) {
                 className = classMatcher.group(1);
-                classPaths = annotations.paths(
+                framework = detectedFramework;
+                if (annotations.hasAny(
                         pending,
-                        "Path",
-                        "RequestMapping"
-                );
+                        "Endpoint",
+                        "WebEndpoint",
+                        "ControllerEndpoint",
+                        "RestControllerEndpoint"
+                )) {
+                    List<String> endpointIds = annotations.quotedValues(
+                            pending,
+                            "Endpoint",
+                            "WebEndpoint",
+                            "ControllerEndpoint",
+                            "RestControllerEndpoint"
+                    );
+                    classPaths = endpointIds.isEmpty()
+                            ? List.of("/actuator")
+                            : endpointIds.stream()
+                                    .map(id -> "/actuator/" + id)
+                                    .toList();
+                    framework = "spring-actuator";
+                } else {
+                    classPaths = annotations.paths(
+                            pending,
+                            "Path",
+                            "RequestMapping"
+                    );
+                }
                 pending.clear();
                 continue;
             }

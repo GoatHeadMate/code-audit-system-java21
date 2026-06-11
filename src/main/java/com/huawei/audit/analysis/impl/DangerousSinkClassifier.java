@@ -29,6 +29,21 @@ final class DangerousSinkClassifier {
         if (isDynamicLoading(method, lowerExpression, lowerType)) {
             return match("DYNAMIC_LOADING", expression);
         }
+        if (isSqlExecution(method, lowerExpression, lowerType)) {
+            return match("SQL_EXECUTION", expression);
+        }
+        if (isXmlParsing(method, lowerExpression, lowerType)) {
+            return match("XML_PARSE", expression);
+        }
+        if (isResponseWrite(method, lowerExpression, lowerType)) {
+            return match("HTTP_RESPONSE_WRITE", expression);
+        }
+        if (isHeaderWrite(method, lowerExpression, lowerType)) {
+            return match("HTTP_HEADER_WRITE", expression);
+        }
+        if ("sendRedirect".equals(method)) {
+            return match("HTTP_REDIRECT", expression);
+        }
         if ("lookup".equals(method)
                 && (lowerExpression.contains("context")
                 || lowerExpression.contains("jndi"))) {
@@ -52,6 +67,87 @@ final class DangerousSinkClassifier {
             return match("NATIVE_LIBRARY", expression);
         }
         return null;
+    }
+
+    private boolean isSqlExecution(
+            String method,
+            String expression,
+            String receiverType
+    ) {
+        String target = expression + " " + receiverType;
+        if (Set.of(
+                "createQuery",
+                "createNativeQuery",
+                "createSQLQuery"
+        ).contains(method)) {
+            return containsAny(target, "entitymanager", "session");
+        }
+        if (Set.of(
+                "execute",
+                "executeQuery",
+                "executeUpdate",
+                "addBatch"
+        ).contains(method)) {
+            return containsAny(
+                    target,
+                    "statement", "preparedstatement", "query"
+            );
+        }
+        return Set.of(
+                "batchUpdate",
+                "query",
+                "queryForList",
+                "queryForMap",
+                "queryForObject",
+                "update"
+        ).contains(method) && containsAny(
+                target,
+                "jdbctemplate", "namedparameterjdbctemplate"
+        );
+    }
+
+    private boolean isXmlParsing(
+            String method,
+            String expression,
+            String receiverType
+    ) {
+        if (!Set.of("parse", "parseText", "read").contains(method)) {
+            return false;
+        }
+        return containsAny(
+                expression + " " + receiverType,
+                "documentbuilder", "saxparser", "xmlreader",
+                "saxbuilder", "saxreader", "dom4j", "xmlinputfactory"
+        );
+    }
+
+    private boolean isResponseWrite(
+            String method,
+            String expression,
+            String receiverType
+    ) {
+        if (!Set.of("append", "print", "println", "write").contains(method)) {
+            return false;
+        }
+        return containsAny(
+                expression + " " + receiverType,
+                "getwriter", "printwriter", "servletoutputstream"
+        );
+    }
+
+    private boolean isHeaderWrite(
+            String method,
+            String expression,
+            String receiverType
+    ) {
+        if (!Set.of("addHeader", "setHeader").contains(method)) {
+            return false;
+        }
+        return containsAny(
+                expression + " " + receiverType,
+                "httpservletresponse", "containerresponsecontext",
+                "response", "resp", "rsp"
+        );
     }
 
     private boolean isExpressionExecution(

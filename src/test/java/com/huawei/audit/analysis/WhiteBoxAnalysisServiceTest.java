@@ -330,4 +330,80 @@ class WhiteBoxAnalysisServiceTest {
                         "functional-method-reference"
                 );
     }
+
+    @Test
+    void buildsCandidatesForWebAndDataVulnerabilityHunters()
+            throws Exception {
+        Files.writeString(tempDir.resolve("WebController.java"), """
+                import java.io.PrintWriter;
+                import java.sql.Statement;
+                import javax.servlet.http.HttpServletResponse;
+                import javax.xml.parsers.DocumentBuilder;
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class WebController {
+                    private Statement statement;
+                    private DocumentBuilder documentBuilder;
+
+                    @GetMapping("/probe")
+                    void probe(
+                            @RequestParam String input,
+                            HttpServletResponse response
+                    ) throws Exception {
+                        statement.executeQuery(input);
+                        documentBuilder.parse(input);
+                        PrintWriter writer = response.getWriter();
+                        writer.write(input);
+                        response.setHeader("X-Test", input);
+                        response.sendRedirect(input);
+                    }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir);
+
+        assertThat(result.candidatePaths())
+                .extracting(candidate -> candidate.sink().category())
+                .contains(
+                        "SQL_EXECUTION",
+                        "HTTP_RESPONSE_WRITE",
+                        "XML_PARSE",
+                        "HTTP_HEADER_WRITE",
+                        "HTTP_REDIRECT"
+                );
+    }
+
+    @Test
+    void discoversCustomActuatorOperationAsEntrypointAndSink()
+            throws Exception {
+        Files.writeString(tempDir.resolve("AdminEndpoint.java"), """
+                import org.springframework.boot.actuate.endpoint.annotation.*;
+
+                @Endpoint(id = "admin")
+                class AdminEndpoint {
+                    @WriteOperation
+                    String execute(String command) {
+                        return command;
+                    }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir);
+
+        assertThat(result.candidatePaths())
+                .singleElement()
+                .satisfies(candidate -> {
+                    assertThat(candidate.entryPoint().path())
+                            .isEqualTo("/actuator/admin");
+                    assertThat(candidate.entryPoint().httpMethods())
+                            .containsExactly("POST");
+                    assertThat(candidate.sink().category())
+                            .isEqualTo("ACTUATOR_ENDPOINT");
+                });
+    }
 }

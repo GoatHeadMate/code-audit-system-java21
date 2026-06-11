@@ -76,6 +76,40 @@ class DangerousSinkClassifierTest {
         );
     }
 
+    @Test
+    void recognizesWebAndDataSinkApis() {
+        assertCategory(
+                "executeQuery",
+                "statement.executeQuery",
+                "Statement",
+                "SQL_EXECUTION"
+        );
+        assertCategory(
+                "write",
+                "writer.write",
+                "PrintWriter",
+                "HTTP_RESPONSE_WRITE"
+        );
+        assertCategory(
+                "parse",
+                "documentBuilder.parse",
+                "DocumentBuilder",
+                "XML_PARSE"
+        );
+        assertCategory(
+                "setHeader",
+                "response.setHeader",
+                "HttpServletResponse",
+                "HTTP_HEADER_WRITE"
+        );
+        assertCategory(
+                "sendRedirect",
+                "response.sendRedirect",
+                "HttpServletResponse",
+                "HTTP_REDIRECT"
+        );
+    }
+
     private void assertCategory(
             String method,
             String expression,

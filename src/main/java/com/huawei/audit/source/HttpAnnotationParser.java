@@ -19,7 +19,8 @@ final class HttpAnnotationParser {
     private static final Set<String> HTTP_ANNOTATIONS = Set.of(
             "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
             "DeleteMapping", "PatchMapping", "GET", "POST", "PUT",
-            "DELETE", "PATCH", "HEAD", "OPTIONS"
+            "DELETE", "PATCH", "HEAD", "OPTIONS", "ReadOperation",
+            "WriteOperation", "DeleteOperation"
     );
 
     AnnotationBlock annotationBlock(List<String> lines, int start) {
@@ -63,6 +64,12 @@ final class HttpAnnotationParser {
                     "PATCH", "HEAD", "OPTIONS"
             ).contains(name)) {
                 methods.add(name);
+            } else if ("ReadOperation".equals(name)) {
+                methods.add("GET");
+            } else if ("WriteOperation".equals(name)) {
+                methods.add("POST");
+            } else if ("DeleteOperation".equals(name)) {
+                methods.add("DELETE");
             } else if (name.endsWith("Mapping")
                     && !"RequestMapping".equals(name)) {
                 methods.add(name.substring(
@@ -98,6 +105,31 @@ final class HttpAnnotationParser {
             }
         }
         return paths.isEmpty() ? List.of("") : List.copyOf(paths);
+    }
+
+    boolean hasAny(List<AnnotationRef> annotations, String... names) {
+        Set<String> accepted = Set.of(names);
+        return annotations.stream()
+                .map(AnnotationRef::name)
+                .anyMatch(accepted::contains);
+    }
+
+    List<String> quotedValues(
+            List<AnnotationRef> annotations,
+            String... names
+    ) {
+        Set<String> accepted = Set.of(names);
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (AnnotationRef annotation : annotations) {
+            if (!accepted.contains(annotation.name())) {
+                continue;
+            }
+            Matcher matcher = QUOTED.matcher(annotation.arguments());
+            while (matcher.find()) {
+                values.add(matcher.group(1));
+            }
+        }
+        return List.copyOf(values);
     }
 
     List<String> texts(List<AnnotationRef> annotations) {

@@ -106,6 +106,8 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
             addSink("NATIVE_DESERIALIZATION", "new XMLDecoder", tree);
         } else if ("URLClassLoader".equals(type)) {
             addSink("DYNAMIC_LOADING", "new URLClassLoader", tree);
+        } else if ("RedirectView".equals(type)) {
+            addSink("HTTP_REDIRECT", "new RedirectView", tree);
         } else if (Set.of(
                 "FileOutputStream",
                 "FileWriter",

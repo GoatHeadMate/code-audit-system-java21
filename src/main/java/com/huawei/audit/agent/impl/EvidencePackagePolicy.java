@@ -41,6 +41,12 @@ final class EvidencePackagePolicy {
                     "NATIVE_DESERIALIZATION"
             )),
             Map.entry("path_traversal", Set.of("FILE_WRITE")),
+            Map.entry("sql_injection", Set.of("SQL_EXECUTION")),
+            Map.entry("xss", Set.of("HTTP_RESPONSE_WRITE")),
+            Map.entry("xxe", Set.of("XML_PARSE")),
+            Map.entry("actuator", Set.of("ACTUATOR_ENDPOINT")),
+            Map.entry("crlf_injection", Set.of("HTTP_HEADER_WRITE")),
+            Map.entry("open_redirect", Set.of("HTTP_REDIRECT")),
             Map.entry("authorization", Set.of(
                     "COMMAND_EXECUTION",
                     "SCRIPT_OR_EXPRESSION_EXECUTION",
