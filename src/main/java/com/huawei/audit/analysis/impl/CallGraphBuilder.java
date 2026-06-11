@@ -152,7 +152,11 @@ final class CallGraphBuilder {
         }
 
         List<MethodNode> byName = index.methodsByName()
-                .getOrDefault(call.methodName(), List.of());
+                .getOrDefault(call.methodName(), List.of())
+                .stream()
+                .filter(method ->
+                        method.parameterCount() == call.argumentCount())
+                .toList();
         if (targets.isEmpty() && byName.size() == 1) {
             MethodNode target = byName.getFirst();
             targets.put(
@@ -271,10 +275,7 @@ final class CallGraphBuilder {
                 .filter(method ->
                         method.parameterCount() == call.argumentCount())
                 .toList();
-        List<MethodNode> effective = arityMatches.isEmpty()
-                ? candidates
-                : arityMatches;
-        for (MethodNode target : effective) {
+        for (MethodNode target : arityMatches) {
             targets.putIfAbsent(
                     target.id(),
                     new ResolvedTarget(target, resolution)
