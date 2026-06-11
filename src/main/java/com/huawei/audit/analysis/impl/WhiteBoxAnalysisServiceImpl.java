@@ -23,6 +23,7 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
     private final StorageWritePathFinder storageWritePathFinder;
     private final StoredCandidateCorrelator storedCandidateCorrelator;
     private final CoverageCalculator coverageCalculator;
+    private final MyBatisXmlScanner myBatisXmlScanner;
 
     public WhiteBoxAnalysisServiceImpl(
             List<EntryPointDiscoverer> entryPointDiscoverers
@@ -35,6 +36,7 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
         this.storageWritePathFinder = new StorageWritePathFinder();
         this.storedCandidateCorrelator = new StoredCandidateCorrelator();
         this.coverageCalculator = new CoverageCalculator();
+        this.myBatisXmlScanner = new MyBatisXmlScanner();
     }
 
     @Override
@@ -44,7 +46,10 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
             discovered.addAll(discoverer.discover(sourceRoot));
         }
 
-        SourceIndex sourceIndex = sourceIndexer.build(sourceRoot);
+        SourceIndex baseIndex = sourceIndexer.build(sourceRoot);
+        SourceIndex sourceIndex = baseIndex.withAdditionalSinks(
+                myBatisXmlScanner.findSinks(sourceRoot, baseIndex)
+        );
         CallGraph callGraph = callGraphBuilder.build(sourceIndex);
         List<EntryPoint> entryPoints = entryPointBinder.bind(
                 discovered,

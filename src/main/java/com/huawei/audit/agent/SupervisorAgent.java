@@ -102,12 +102,21 @@ public class SupervisorAgent {
         return """
                 You are the main enterprise white-box audit supervisor.
 
+                ════════════════════════════════════════════════════════════════
+                OUTPUT FORMAT — MANDATORY, ZERO TOLERANCE
+                Your ENTIRE final response must be a single JSON object.
+                It must START with the character { and END with the character }.
+                Do NOT write any text, markdown, code fences, summary tables,
+                explanations, or commentary before or after the JSON.
+                Violation = fatal parse error = entire audit fails.
+                ════════════════════════════════════════════════════════════════
+
                 You have native Claude Code Agent subagents named `audit-<hunter>`.
                 Java has already built white-box candidate paths from external entrypoints
                 through source call edges to dangerous sinks, including two-stage stored
                 candidates that join an HTTP write path to an asynchronous execution path.
-                Your job is to delegate semantic validation, review verdict quality and aggregate confirmed remote
-                code-execution findings. Do not repeat broad source discovery yourself.
+                Your job is to delegate semantic validation, review verdict quality and
+                aggregate confirmed findings. Do not repeat broad source discovery yourself.
 
                 Rules:
                 1. Delegate each selected category to its matching Agent subagent.
@@ -117,10 +126,11 @@ public class SupervisorAgent {
                    Log4j JNDI, SSRF and SSTI are mandatory when available because they can
                    directly enable RCE or materially affect remote reachability.
                 4. Delegate no more than the configured maximum and never invent names.
-                5. Give each subagent its exact task file and source root. Require it to
-                   review every candidate-path chunk in that task.
-                   Stored-candidate chunks are mandatory and must be reviewed as joined
-                   write/storage/read/execution flows.
+                5. Give each subagent its exact task file path and source root path.
+                   In the prompt to each subagent, include the literal string:
+                   "Read the task file at <absolute path> first."
+                   Require it to review EVERY candidate-path chunk and EVERY
+                   stored-candidate chunk listed in that task.
                 6. Subagents must use only Read/Glob/Grep. Never request Bash or CodeQL.
                 7. If a subagent returns an agentId and says "use SendMessage to continue",
                    you MUST use SendMessage with that agentId to resume it. Never create
@@ -134,15 +144,12 @@ public class SupervisorAgent {
                    message, evidence, data_flow_path (array of strings), http_method,
                    http_path, entrypoint, reachability and discovery_source.
                    Omitting any of these fields makes the finding unparseable.
-                10. Before finalizing, check that delegated subagents reviewed all candidate
-                    chunks assigned to them. Treat unresolved entrypoints and calls as
-                    coverage limitations, not confirmed vulnerabilities.
-                11. Return one strict JSON object without Markdown:
-                   {
-                     "selected_hunters": ["..."],
-                     "rationale": "...",
-                     "findings": [...]
-                   }
+                10. Before finalizing, verify each subagent confirmed it reviewed all
+                    candidate chunks. If a subagent skipped chunks, resume it with
+                    SendMessage. Treat unresolved entrypoints and calls as coverage
+                    limitations, not confirmed vulnerabilities.
+                11. Return format:
+                   {"selected_hunters":["..."],"rationale":"...","findings":[...]}
                 """;
     }
 
@@ -243,32 +250,105 @@ public class SupervisorAgent {
         }
 
         Matcher fenced = FENCED_JSON.matcher(stripped);
-        JsonNode fencedEnvelope = null;
+        String lastFencedBody = null;
         while (fenced.find()) {
-            JsonNode candidate = parseCandidate(fenced.group(1));
+            String body = fenced.group(1);
+            JsonNode candidate = parseCandidate(body);
             if (isEnvelope(candidate)) {
-                fencedEnvelope = candidate;
+                return candidate;
+            }
+            if (body.contains("\"findings\"") && body.contains("\"selected_hunters\"")) {
+                lastFencedBody = body;
             }
         }
-        if (fencedEnvelope != null) {
-            return fencedEnvelope;
+        if (lastFencedBody != null) {
+            JsonNode repaired = repairTruncatedJson(lastFencedBody);
+            if (isEnvelope(repaired)) {
+                return repaired;
+            }
         }
 
-        // Fall back to every object start instead of the first one. Explanatory
-        // text can contain expressions such as ${orderByClause} before the
-        // actual JSON envelope.
         for (int start = stripped.lastIndexOf('{');
              start >= 0;
              start = stripped.lastIndexOf('{', start - 1)) {
-            JsonNode candidate = parseCandidate(stripped.substring(start));
+            String slice = stripped.substring(start);
+            JsonNode candidate = parseCandidate(slice);
             if (isEnvelope(candidate)) {
                 return candidate;
+            }
+            if (slice.contains("\"findings\"") && slice.contains("\"selected_hunters\"")) {
+                JsonNode repaired = repairTruncatedJson(slice);
+                if (isEnvelope(repaired)) {
+                    return repaired;
+                }
             }
         }
 
         throw new IllegalArgumentException(
                 "supervisor did not return a JSON object"
         );
+    }
+
+    private JsonNode repairTruncatedJson(String text) {
+        String trimmed = text.strip();
+        if (!trimmed.startsWith("{")) {
+            int start = trimmed.indexOf('{');
+            if (start < 0) {
+                return null;
+            }
+            trimmed = trimmed.substring(start);
+        }
+        int braces = 0;
+        int brackets = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        int lastSafeEnd = -1;
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\' && inString) {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (c == '{') {
+                braces++;
+            } else if (c == '}') {
+                braces--;
+            } else if (c == '[') {
+                brackets++;
+            } else if (c == ']') {
+                brackets--;
+            }
+            if (c == ',' || c == '}' || c == ']') {
+                lastSafeEnd = i + 1;
+            }
+        }
+        if (braces == 0 && brackets == 0) {
+            return parseCandidate(trimmed);
+        }
+        if (lastSafeEnd <= 0) {
+            return null;
+        }
+        StringBuilder repaired = new StringBuilder(trimmed.substring(0, lastSafeEnd));
+        while (brackets > 0) {
+            repaired.append(']');
+            brackets--;
+        }
+        while (braces > 0) {
+            repaired.append('}');
+            braces--;
+        }
+        return parseCandidate(repaired.toString());
     }
 
     private JsonNode parseCandidate(String candidate) {

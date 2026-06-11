@@ -3,6 +3,7 @@ package com.huawei.audit.analysis.impl;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.MethodNode;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StorageAccess;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +31,15 @@ record SourceIndex(
                 Map.of(),
                 List.of()
         );
+    }
+
+    SourceIndex withAdditionalSinks(List<Sink> extraSinks) {
+        if (extraSinks.isEmpty()) {
+            return this;
+        }
+        List<Sink> combined = new ArrayList<>(sinks());
+        combined.addAll(extraSinks);
+        return create(methods(), combined, implementations(), parseErrors());
     }
 
     static SourceIndex create(

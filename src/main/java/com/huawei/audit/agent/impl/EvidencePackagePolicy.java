@@ -3,6 +3,7 @@ package com.huawei.audit.agent.impl;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CandidatePath;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Coverage;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StoredCandidate;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,6 +78,7 @@ final class EvidencePackagePolicy {
         return candidates.stream()
                 .filter(candidate ->
                         categories.contains(candidate.sink().category()))
+                .sorted(candidatePriority())
                 .toList();
     }
 
@@ -92,7 +94,30 @@ final class EvidencePackagePolicy {
                 .filter(candidate -> categories.contains(
                         candidate.executionPath().sink().category()
                 ))
+                .sorted(Comparator.comparing(
+                        (StoredCandidate c) -> confidenceRank(
+                                c.correlationConfidence()
+                        )
+                ).thenComparingInt(
+                        c -> c.executionPath().callDepth()
+                ))
                 .toList();
+    }
+
+    private static Comparator<CandidatePath> candidatePriority() {
+        return Comparator
+                .comparing((CandidatePath c) -> confidenceRank(
+                        c.staticConfidence()
+                ))
+                .thenComparingInt(CandidatePath::callDepth);
+    }
+
+    private static int confidenceRank(String confidence) {
+        return switch (confidence) {
+            case "HIGH" -> 0;
+            case "MEDIUM" -> 1;
+            default -> 2;
+        };
     }
 
     static Map<String, Object> coverageSummary(Coverage coverage) {

@@ -90,11 +90,16 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                   positives.
                 - If the task has no candidates for this category, inspect only its
                   unresolved entrypoints for obvious analyzer gaps, then return [].
-                - Return exactly one JSON array. Each item must contain rule_id, title,
-                  severity, confidence, file_path, start_line, message, evidence and
-                  vuln_type. Also include http_method, http_path, entrypoint,
-                  reachability, discovery_source and data_flow_path when applicable.
-                  Return [] when no issue is confirmed.
+                - Return exactly one JSON object with two keys:
+                  "chunks_reviewed" (integer — how many candidate + stored-candidate
+                  chunk files you actually opened and read) and
+                  "findings" (array of finding objects).
+                  Each finding must contain rule_id, title, severity, confidence,
+                  file_path, start_line, message, evidence and vuln_type. Also include
+                  http_method, http_path, entrypoint, reachability, discovery_source
+                  and data_flow_path when applicable.
+                  Return {"chunks_reviewed": 0, "findings": []} when no issue is
+                  confirmed.
                 - Do not use Markdown fences or explanatory text.
                 """.formatted(
                 dashed,
