@@ -16,8 +16,10 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
@@ -51,7 +53,9 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
         sessionContext.set(new SessionContext(
                 workingDirectory,
                 sourceRoot,
-                eventConsumer
+                eventConsumer,
+                new LinkedHashMap<>(),
+                new AtomicInteger()
         ));
         try {
             return chat(messages).aiMessage().text();
@@ -146,16 +150,27 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                 return;
             }
             if ("user".equals(type)) {
-                // Count how many subagents returned tool_result blocks.
                 JsonNode content = event.path("message").path("content");
                 if (!content.isArray()) return;
-                long returned = 0;
                 for (JsonNode block : content) {
-                    if ("tool_result".equals(block.path("type").asText())) returned++;
-                }
-                if (returned > 0) {
+                    if (!"tool_result".equals(block.path("type").asText())) {
+                        continue;
+                    }
+                    String toolUseId = block.path("tool_use_id").asText("");
+                    String agent = context.delegatedAgents().getOrDefault(
+                            toolUseId,
+                            "unknown-hunter"
+                    );
+                    int completed = context.returnedAgents().incrementAndGet();
+                    int delegated = context.delegatedAgents().size();
+                    String status = block.path("is_error").asBoolean(false)
+                            ? "FAILED"
+                            : "DONE";
                     context.eventConsumer().accept(
-                            "[supervisor-agent] " + returned + " subagent(s) returned results"
+                            "[subagent-return] " + status + " " + agent
+                                    + " | progress " + completed + "/"
+                                    + Math.max(completed, delegated)
+                                    + " | result " + resultSize(block.path("content"))
                     );
                 }
                 return;
@@ -176,8 +191,12 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                             input.path("name").asText("hunter")
                     );
                     String description = input.path("description").asText("");
+                    String toolUseId = block.path("id").asText("");
+                    if (!toolUseId.isBlank()) {
+                        context.delegatedAgents().put(toolUseId, agent);
+                    }
                     context.eventConsumer().accept(
-                            "[supervisor-agent] delegated " + agent
+                            "[subagent-start] START " + agent
                                     + (description.isBlank() ? "" : ": " + description)
                     );
                 } else if ("text".equals(blockType)) {
@@ -197,9 +216,21 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
         }
     }
 
+    private String resultSize(JsonNode content) {
+        int length = content.isTextual()
+                ? content.asText("").length()
+                : content.toString().length();
+        if (length < 1_024) {
+            return length + " B";
+        }
+        return String.format(java.util.Locale.ROOT, "%.1f KB", length / 1_024.0);
+    }
+
     private record SessionContext(
             Path workingDirectory,
             Path sourceRoot,
-            Consumer<String> eventConsumer
+            Consumer<String> eventConsumer,
+            Map<String, String> delegatedAgents,
+            AtomicInteger returnedAgents
     ) { }
 }
