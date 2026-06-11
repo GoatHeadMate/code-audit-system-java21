@@ -6,22 +6,65 @@ import com.huawei.audit.analysis.WhiteBoxAnalysisService.MethodNode;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.UnresolvedCall;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 final class CallGraphBuilder {
     private static final int MAX_TARGETS_PER_CALL = 12;
+    private static final Set<String> DEFERRED_DISPATCH_METHODS = Set.of(
+            "execute",
+            "invokeAndWait",
+            "invokeLater",
+            "runAsync",
+            "schedule",
+            "scheduleAtFixedRate",
+            "scheduleWithFixedDelay",
+            "submit",
+            "supplyAsync"
+    );
+    private static final Set<String> FUNCTIONAL_DISPATCH_METHODS = Set.of(
+            "accept",
+            "apply",
+            "call",
+            "run",
+            "test"
+    );
+    private static final Set<String> FUNCTIONAL_TYPES = Set.of(
+            "BiConsumer",
+            "BiFunction",
+            "Callable",
+            "Consumer",
+            "Function",
+            "Predicate",
+            "Runnable",
+            "Supplier"
+    );
 
     CallGraph build(SourceIndex index) {
         Map<String, List<CallEdge>> outgoing = new LinkedHashMap<>();
         List<UnresolvedCall> unresolved = new ArrayList<>();
+        Map<String, List<String>> referencesByClass =
+                methodReferencesByClass(index);
 
         for (MethodNode method : index.methods()) {
             List<CallEdge> edges = new ArrayList<>();
             for (CallSite call : method.calls()) {
                 List<ResolvedTarget> targets = resolveTargets(method, call, index);
-                if (targets.isEmpty()) {
+                List<ResolvedTarget> callbacks = resolveCallbacks(
+                        method,
+                        call,
+                        index,
+                        referencesByClass
+                );
+                LinkedHashMap<String, ResolvedTarget> resolved =
+                        new LinkedHashMap<>();
+                targets.forEach(target ->
+                        resolved.putIfAbsent(target.method().id(), target));
+                callbacks.forEach(target ->
+                        resolved.putIfAbsent(target.method().id(), target));
+                if (resolved.isEmpty()) {
                     unresolved.add(new UnresolvedCall(
                             method.id(),
                             method.filePath(),
@@ -30,7 +73,7 @@ final class CallGraphBuilder {
                     ));
                     continue;
                 }
-                for (ResolvedTarget target : targets.stream()
+                for (ResolvedTarget target : resolved.values().stream()
                         .limit(MAX_TARGETS_PER_CALL)
                         .toList()) {
                     edges.add(new CallEdge(
@@ -76,6 +119,13 @@ final class CallGraphBuilder {
                         "interface-implementation"
                 );
             }
+            addImplementationTargets(
+                    targets,
+                    index,
+                    receiverType,
+                    call,
+                    new LinkedHashSet<>()
+            );
         }
 
         if (call.receiver().isBlank()
@@ -110,6 +160,129 @@ final class CallGraphBuilder {
             );
         }
         return List.copyOf(targets.values());
+    }
+
+    private List<ResolvedTarget> resolveCallbacks(
+            MethodNode caller,
+            CallSite call,
+            SourceIndex index,
+            Map<String, List<String>> referencesByClass
+    ) {
+        LinkedHashMap<String, ResolvedTarget> targets = new LinkedHashMap<>();
+        if (DEFERRED_DISPATCH_METHODS.contains(call.methodName())) {
+            for (String argumentType : call.argumentTypes()) {
+                if (argumentType == null || argumentType.isBlank()) {
+                    continue;
+                }
+                addCallbackMethod(
+                        targets,
+                        index,
+                        argumentType,
+                        "run",
+                        "deferred-callback"
+                );
+                addCallbackMethod(
+                        targets,
+                        index,
+                        argumentType,
+                        "call",
+                        "deferred-callback"
+                );
+            }
+        }
+        if (isFunctionalDispatch(call)) {
+            for (String reference : referencesByClass.getOrDefault(
+                    caller.className(),
+                    List.of()
+            )) {
+                addCallbackMethod(
+                        targets,
+                        index,
+                        caller.className(),
+                        reference,
+                        "functional-method-reference"
+                );
+            }
+        }
+        return List.copyOf(targets.values());
+    }
+
+    private Map<String, List<String>> methodReferencesByClass(
+            SourceIndex index
+    ) {
+        Map<String, LinkedHashSet<String>> collected = new LinkedHashMap<>();
+        for (MethodNode method : index.methods()) {
+            if (method.methodReferences().isEmpty()) {
+                continue;
+            }
+            collected.computeIfAbsent(
+                    method.className(),
+                    ignored -> new LinkedHashSet<>()
+            ).addAll(method.methodReferences());
+        }
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        collected.forEach((className, references) ->
+                result.put(className, List.copyOf(references)));
+        return Map.copyOf(result);
+    }
+
+    private boolean isFunctionalDispatch(CallSite call) {
+        if (!FUNCTIONAL_DISPATCH_METHODS.contains(call.methodName())) {
+            return false;
+        }
+        String receiverType = AnalysisTextUtils.simpleName(
+                call.receiverType()
+        );
+        return FUNCTIONAL_TYPES.contains(receiverType)
+                || call.receiver().contains("(");
+    }
+
+    private void addImplementationTargets(
+            Map<String, ResolvedTarget> targets,
+            SourceIndex index,
+            String parent,
+            CallSite call,
+            Set<String> visited
+    ) {
+        String simpleParent = AnalysisTextUtils.simpleName(parent);
+        if (!visited.add(simpleParent)) {
+            return;
+        }
+        for (String implementation : index.implementations()
+                .getOrDefault(simpleParent, Set.of())) {
+            addClassTargets(
+                    targets,
+                    index,
+                    implementation,
+                    call,
+                    "interface-implementation"
+            );
+            addImplementationTargets(
+                    targets,
+                    index,
+                    implementation,
+                    call,
+                    visited
+            );
+        }
+    }
+
+    private void addCallbackMethod(
+            Map<String, ResolvedTarget> targets,
+            SourceIndex index,
+            String className,
+            String methodName,
+            String resolution
+    ) {
+        String key = AnalysisTextUtils.simpleName(className)
+                + "#" + methodName;
+        for (MethodNode target : index.methodsByClassAndName()
+                .getOrDefault(key, List.of())) {
+            targets.putIfAbsent(
+                    target.id(),
+                    new ResolvedTarget(target, resolution)
+            );
+        }
     }
 
     private void addClassTargets(

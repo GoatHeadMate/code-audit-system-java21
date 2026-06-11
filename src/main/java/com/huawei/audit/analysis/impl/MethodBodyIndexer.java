@@ -6,8 +6,11 @@ import com.huawei.audit.analysis.WhiteBoxAnalysisService.StorageAccess;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.IdentifierTree;
 import com.sun.source.tree.MemberSelectTree;
+import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.NewClassTree;
+import com.sun.source.tree.ParenthesizedTree;
+import com.sun.source.tree.TypeCastTree;
 import com.sun.source.tree.VariableTree;
 import com.sun.source.util.TreeScanner;
 import java.util.ArrayList;
@@ -21,6 +24,7 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
     private final Map<String, String> variableTypes;
     private final List<Sink> sinks;
     private final List<CallSite> calls = new ArrayList<>();
+    private final List<String> methodReferences = new ArrayList<>();
     private final List<StorageAccess> storageAccesses = new ArrayList<>();
     private final DangerousSinkClassifier sinkClassifier =
             new DangerousSinkClassifier();
@@ -60,6 +64,9 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
                 invocation.receiver(),
                 receiverType,
                 tree.getArguments().size(),
+                tree.getArguments().stream()
+                        .map(this::expressionType)
+                        .toList(),
                 source.line(tree, true),
                 expression
         ));
@@ -109,12 +116,22 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
         return super.visitNewClass(tree, unused);
     }
 
+    @Override
+    public Void visitMemberReference(MemberReferenceTree tree, Void unused) {
+        methodReferences.add(tree.getName().toString());
+        return super.visitMemberReference(tree, unused);
+    }
+
     List<CallSite> calls() {
         return calls;
     }
 
     Map<String, String> variableTypes() {
         return variableTypes;
+    }
+
+    List<String> methodReferences() {
+        return methodReferences;
     }
 
     List<StorageAccess> storageAccesses() {
@@ -161,6 +178,27 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
         return variableType != null
                 ? variableType
                 : AnalysisTextUtils.startsUppercase(root) ? root : "";
+    }
+
+    private String expressionType(ExpressionTree expression) {
+        if (expression instanceof IdentifierTree identifier) {
+            return variableTypes.getOrDefault(
+                    identifier.getName().toString(),
+                    ""
+            );
+        }
+        if (expression instanceof NewClassTree newClass) {
+            return AnalysisTextUtils.simpleName(
+                    newClass.getIdentifier().toString()
+            );
+        }
+        if (expression instanceof TypeCastTree cast) {
+            return AnalysisTextUtils.simpleName(cast.getType().toString());
+        }
+        if (expression instanceof ParenthesizedTree parenthesized) {
+            return expressionType(parenthesized.getExpression());
+        }
+        return "";
     }
 
     private record Invocation(String methodName, String receiver) { }

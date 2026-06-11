@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 final class CandidatePathFinder {
-    private static final int MAX_PATH_DEPTH = 10;
+    private static final int MAX_PATH_DEPTH = 12;
     private static final int MAX_CANDIDATES = 1_000;
 
     List<CandidatePath> find(

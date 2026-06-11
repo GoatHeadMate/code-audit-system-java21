@@ -45,6 +45,7 @@ public interface WhiteBoxAnalysisService {
             String signature,
             List<CallSite> calls,
             Map<String, String> variableTypes,
+            List<String> methodReferences,
             List<StorageAccess> storageAccesses
     ) { }
 
@@ -53,6 +54,7 @@ public interface WhiteBoxAnalysisService {
             String receiver,
             String receiverType,
             int argumentCount,
+            List<String> argumentTypes,
             int line,
             String expression
     ) { }

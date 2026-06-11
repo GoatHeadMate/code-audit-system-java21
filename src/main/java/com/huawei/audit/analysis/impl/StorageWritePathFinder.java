@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Set;
 
 final class StorageWritePathFinder {
-    private static final int MAX_PATH_DEPTH = 10;
+    private static final int MAX_PATH_DEPTH = 12;
     private static final int MAX_PATHS = 1_000;
 
     List<StorageWritePath> find(

@@ -114,6 +114,7 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                 sourceText(tree, 400),
                 List.copyOf(body.calls()),
                 Map.copyOf(body.variableTypes()),
+                List.copyOf(body.methodReferences()),
                 List.copyOf(body.storageAccesses())
         ));
         return null;

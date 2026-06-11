@@ -215,4 +215,119 @@ class WhiteBoxAnalysisServiceTest {
                             .isEqualTo("RuleRepository");
                 });
     }
+
+    @Test
+    void followsExecutorAndMethodReferenceDispatchToCommandSinks()
+            throws Exception {
+        Files.writeString(tempDir.resolve("TaskController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class TaskController {
+                    private TaskCreator creator;
+
+                    @PostMapping("/tasks")
+                    void create(@RequestBody String input) {
+                        creator.create(input);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("TaskCreator.java"), """
+                class TaskCreator {
+                    void create(String input) {
+                        CollectionTask task = new CollectionTask(input);
+                        TaskManager.instance().registerTask(task);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("TaskManager.java"), """
+                import java.util.concurrent.ExecutorService;
+
+                class TaskManager {
+                    private static ExecutorService executor;
+                    static TaskManager instance() { return null; }
+
+                    void registerTask(CollectionTask task) {
+                        executor.submit(task);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("CollectionTask.java"), """
+                class CollectionTask implements Runnable {
+                    private Strategy strategy;
+                    private String input;
+                    CollectionTask(String input) { this.input = input; }
+
+                    public void run() {
+                        strategy.collect(input);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("Strategy.java"), """
+                interface Strategy {
+                    void collect(String input);
+                }
+                """);
+        Files.writeString(tempDir.resolve("BaseStrategy.java"), """
+                abstract class BaseStrategy implements Strategy {
+                }
+                """);
+        Files.writeString(tempDir.resolve("RestStrategy.java"), """
+                class RestStrategy implements Strategy {
+                    public void collect(String input) {
+                        try {
+                            new ProcessBuilder("/bin/bash", "-c", input).start();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("DbStrategy.java"), """
+                import java.util.Map;
+                import java.util.function.Consumer;
+
+                class DbStrategy extends BaseStrategy {
+                    private Map<String, Consumer<String>> handlers;
+
+                    void init() {
+                        handlers.put("redis", this::onRedis);
+                    }
+
+                    public void collect(String input) {
+                        handlers.get("redis").accept(input);
+                    }
+
+                    private void onRedis(String input) {
+                        try {
+                            new ProcessBuilder("/bin/bash", "-c", input).start();
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir);
+
+        assertThat(result.candidatePaths())
+                .filteredOn(candidate ->
+                        candidate.entryPoint().path().equals("/tasks"))
+                .extracting(candidate -> candidate.sink().methodId())
+                .anyMatch(methodId -> methodId.startsWith(
+                        "RestStrategy#collect/"
+                ))
+                .anyMatch(methodId -> methodId.startsWith(
+                        "DbStrategy#onRedis/"
+                ));
+        assertThat(result.candidatePaths())
+                .filteredOn(candidate ->
+                        candidate.entryPoint().path().equals("/tasks"))
+                .flatExtracting(candidate -> candidate.callEdges())
+                .extracting(edge -> edge.resolution())
+                .contains(
+                        "deferred-callback",
+                        "functional-method-reference"
+                );
+    }
 }
