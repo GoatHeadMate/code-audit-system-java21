@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class EvidencePreparationServiceImpl implements EvidencePreparationService {
     private static final int ITEMS_PER_CHUNK = 50;
+    private static final int MAX_CHUNK_BYTES = 64 * 1_024;
     private static final int MAX_UNRESOLVED_CALLS_WRITTEN = 5_000;
 
     private final WhiteBoxAnalysisService analysisService;
@@ -253,20 +254,39 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<?> items
     ) throws Exception {
         List<String> chunks = new ArrayList<>();
-        for (int start = 0; start < items.size(); start += ITEMS_PER_CHUNK) {
-            int end = Math.min(start + ITEMS_PER_CHUNK, items.size());
+        int start = 0;
+        int chunkNumber = 1;
+        while (start < items.size()) {
+            int end = start;
+            Map<String, Object> content = null;
+            while (end < items.size() && end - start < ITEMS_PER_CHUNK) {
+                Map<String, Object> candidate = chunkContent(
+                        items,
+                        start,
+                        end + 1
+                );
+                int candidateBytes = objectMapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsBytes(candidate)
+                        .length;
+                if (candidateBytes > MAX_CHUNK_BYTES && end > start) {
+                    break;
+                }
+                content = candidate;
+                end++;
+                if (candidateBytes > MAX_CHUNK_BYTES) {
+                    break;
+                }
+            }
             Path chunk = directory.resolve(
                     "%s-%04d.json".formatted(
                             prefix,
-                            start / ITEMS_PER_CHUNK + 1
+                            chunkNumber
                     )
             );
-            Map<String, Object> content = new LinkedHashMap<>();
-            content.put("start_index", start);
-            content.put("end_index", end - 1);
-            content.put("items", items.subList(start, end));
             writeJson(chunk, content);
             chunks.add(absolute(chunk));
+            start = end;
+            chunkNumber++;
         }
         if (chunks.isEmpty()) {
             Path chunk = directory.resolve(prefix + "-0001.json");
@@ -281,6 +301,18 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             chunks.add(absolute(chunk));
         }
         return List.copyOf(chunks);
+    }
+
+    private Map<String, Object> chunkContent(
+            List<?> items,
+            int start,
+            int end
+    ) {
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("start_index", start);
+        content.put("end_index", end - 1);
+        content.put("items", items.subList(start, end));
+        return content;
     }
 
     private void writeJson(Path path, Object value) throws Exception {

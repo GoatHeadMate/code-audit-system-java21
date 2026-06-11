@@ -157,12 +157,12 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                         continue;
                     }
                     String toolUseId = block.path("tool_use_id").asText("");
-                    String agent = context.delegatedAgents().getOrDefault(
-                            toolUseId,
-                            "unknown-hunter"
-                    );
+                    String agent = context.delegatedAgents().remove(toolUseId);
+                    if (agent == null) {
+                        continue;
+                    }
                     int completed = context.returnedAgents().incrementAndGet();
-                    int delegated = context.delegatedAgents().size();
+                    int delegated = completed + context.delegatedAgents().size();
                     String status = block.path("is_error").asBoolean(false)
                             ? "FAILED"
                             : "DONE";

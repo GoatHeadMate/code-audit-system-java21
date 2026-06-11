@@ -13,6 +13,7 @@ import com.huawei.audit.source.HttpEndpointScanner;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -135,5 +136,58 @@ class EvidencePreparationServiceTest {
         assertThat(result.analysisSummary())
                 .containsEntry("stored_candidates", 1L)
                 .containsEntry("storage_accesses", 2L);
+    }
+
+    @Test
+    void splitsLargeCandidatePackagesBeforeClaudeReadLimit() throws Exception {
+        Path source = tempDir.resolve("large-source");
+        Files.createDirectories(source);
+        String largeArgument = "a".repeat(20_000);
+        List<String> methods = new ArrayList<>();
+        for (int index = 0; index < 6; index++) {
+            methods.add("""
+                    @PostMapping("/run-%d")
+                    void run%d() throws Exception {
+                        new ProcessBuilder("%s").start();
+                    }
+                    """.formatted(index, index, largeArgument));
+        }
+        Files.writeString(source.resolve("LargeController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class LargeController {
+                %s
+                }
+                """.formatted(String.join("\n", methods)));
+
+        ObjectMapper mapper = new ObjectMapper();
+        EvidencePreparationService service = new EvidencePreparationServiceImpl(
+                new WhiteBoxAnalysisServiceImpl(List.of(
+                        new HttpEndpointScanner()
+                )),
+                mapper,
+                new JobLogBroker(),
+                TEST_PROPERTIES
+        );
+        AuditJob job = new AuditJob("large1", "java");
+        job.workDir(tempDir.resolve("audit_large1"));
+        Files.createDirectories(job.workDir());
+
+        var result = service.prepare(
+                job,
+                source,
+                List.of("command_injection")
+        );
+        var task = mapper.readTree(
+                Path.of(result.manifest().get("command_injection")).toFile()
+        );
+
+        assertThat(task.path("candidate_count").asInt()).isEqualTo(6);
+        assertThat(task.path("candidate_chunks").size()).isGreaterThan(1);
+        for (var chunk : task.path("candidate_chunks")) {
+            assertThat(Files.size(Path.of(chunk.asText())))
+                    .isLessThanOrEqualTo(64 * 1_024);
+        }
     }
 }

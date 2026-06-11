@@ -56,6 +56,14 @@ class ClaudeCodeSupervisorModelTest {
             output.accept("""
                     {"type":"user","message":{"content":[{
                       "type":"tool_result",
+                      "tool_use_id":"internal-read-1",
+                      "is_error":true,
+                      "content":"File content exceeds maximum allowed size"
+                    }]}}
+                    """);
+            output.accept("""
+                    {"type":"user","message":{"content":[{
+                      "type":"tool_result",
                       "tool_use_id":"agent-1",
                       "content":"confirmed finding"
                     }]}}
@@ -88,5 +96,8 @@ class ClaudeCodeSupervisorModelTest {
                         "[subagent-return] DONE audit-command-injection"
                                 + " | progress 1/1 | result 17 B"
                 );
+        assertThat(logs)
+                .noneMatch(log -> log.contains("unknown-hunter")
+                        || log.contains("internal-read-1"));
     }
 }
