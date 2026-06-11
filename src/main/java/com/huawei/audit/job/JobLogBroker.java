@@ -5,16 +5,23 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @Component
 public class JobLogBroker {
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+            JobLogBroker.class
+    );
+
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<SseEmitter>> subscribers =
             new ConcurrentHashMap<>();
 
     public void publish(AuditJob job, String line) {
         job.appendLog(line);
+        writeBackendLog(job.jobId(), line);
         for (SseEmitter emitter : subscribers(job.jobId())) {
             send(emitter, line);
         }
@@ -47,6 +54,20 @@ public class JobLogBroker {
 
     private CopyOnWriteArrayList<SseEmitter> subscribers(String jobId) {
         return subscribers.computeIfAbsent(jobId, ignored -> new CopyOnWriteArrayList<>());
+    }
+
+    private void writeBackendLog(String jobId, String line) {
+        String normalized = line.replace("\r", "").replace("\n", " | ");
+        if (normalized.contains("[FATAL]")
+                || normalized.contains("[ERROR]")
+                || normalized.startsWith("ERROR")) {
+            LOGGER.error("[audit:{}] {}", jobId, normalized);
+        } else if (normalized.contains("[WARN]")
+                || normalized.startsWith("WARN")) {
+            LOGGER.warn("[audit:{}] {}", jobId, normalized);
+        } else {
+            LOGGER.info("[audit:{}] {}", jobId, normalized);
+        }
     }
 
     private void send(SseEmitter emitter, String line) {
