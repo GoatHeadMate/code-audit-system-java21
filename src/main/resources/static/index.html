@@ -53,6 +53,21 @@
     background: rgba(185,28,28,.12);
     color: #fee2e2;
   }
+  .log-supervisor {
+    margin: 5px 0;
+    padding: 7px 10px;
+    border: 1px solid rgba(129,140,248,.28);
+    border-left: 4px solid #818cf8;
+    border-radius: 6px;
+    background: rgba(79,70,229,.09);
+    color: #e0e7ff;
+  }
+  .log-supervisor.completed {
+    border-color: rgba(52,211,153,.35);
+    border-left-color: #34d399;
+    background: rgba(5,150,105,.12);
+    color: #d1fae5;
+  }
 
   /* Job list rows */
   .job-row { cursor: pointer; transition: background .1s; border-left: 2px solid transparent; }
@@ -436,6 +451,10 @@ function logColor(t, type) {
     return 'log-subagent-return' + (t.includes(' FAILED ') ? ' failed' : '');
   if (t.startsWith('[subagent-start]')) return 'log-subagent-start';
   if (t.includes('subagent(s) returned results')) return 'log-subagent-return';
+  if (t.startsWith('[supervisor]')) {
+    const completed = /\bcompleted\b|all\s+\d+\s+hunters?\s+completed/i.test(t);
+    return 'log-supervisor' + (completed ? ' completed' : '');
+  }
   return 'text-gray-300';
 }
 function colorize(t, type) {
@@ -460,6 +479,14 @@ function colorize(t, type) {
   if (t.includes('subagent(s) returned results'))
     return `<span class="text-emerald-300">HUNTER COMPLETED</span>`
       + `<span class="text-gray-300 ml-2">${esc(t)}</span>`;
+  if (t.startsWith('[supervisor]')) {
+    const body = t.slice('[supervisor]'.length).trim();
+    const completed = /\bcompleted\b|all\s+\d+\s+hunters?\s+completed/i.test(body);
+    const label = completed ? 'SUPERVISOR UPDATE · COMPLETED' : 'SUPERVISOR UPDATE';
+    const labelClass = completed ? 'text-emerald-300' : 'text-indigo-300';
+    return `<span class="${labelClass} font-semibold">${label}</span>`
+      + `<span class="text-gray-200 ml-2">${esc(body)}</span>`;
+  }
   if (t.startsWith('[codeql]'))
     return `<span class="text-cyan-400">[codeql]</span>${esc(t.slice(8))}`;
   if (t.startsWith('[orchestrator]'))
