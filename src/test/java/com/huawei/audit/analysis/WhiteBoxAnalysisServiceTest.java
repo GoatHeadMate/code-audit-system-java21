@@ -568,4 +568,51 @@ class WhiteBoxAnalysisServiceTest {
                     }
                 });
     }
+
+    @Test
+    void detectsArgumentInjectionThroughSplitAndWrapperExec() throws Exception {
+        Files.writeString(tempDir.resolve("TaskCheckService.java"), """
+                package com.example;
+                import javax.ws.rs.*;
+
+                @Path("/dpfault/task/v1")
+                public class TaskCheckService {
+                    @GET @Path("/check/{type}")
+                    public String check(@QueryParam("checkName") String checkName) {
+                        String ip = "10.0.0.1";
+                        getOpenGeminiTag(ip, checkName);
+                        return "ok";
+                    }
+
+                    private String getOpenGeminiTag(String ip, String checkName) {
+                        String cmd = "/bin/bash /opt/script.sh " + ip + " " + checkName;
+                        return RuntimeExec.executeAndGetReturnMsg(cmd.split(" "));
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("RuntimeExec.java"), """
+                package com.example;
+
+                public class RuntimeExec {
+                    public static String executeAndGetReturnMsg(String[] commands) {
+                        try {
+                            Process p = Runtime.getRuntime().exec(commands);
+                            return new String(p.getInputStream().readAllBytes());
+                        } catch (Exception e) { return ""; }
+                    }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir, List.of(), null, "claude");
+
+        assertThat(result.candidatePaths())
+                .as("should find path through split() + wrapper exec to Runtime.exec sink")
+                .isNotEmpty();
+        assertThat(result.candidatePaths())
+                .anyMatch(path ->
+                        path.sink().category().equals("COMMAND_EXECUTION")
+                                && path.entryPoint().path().contains("/check"));
+    }
 }

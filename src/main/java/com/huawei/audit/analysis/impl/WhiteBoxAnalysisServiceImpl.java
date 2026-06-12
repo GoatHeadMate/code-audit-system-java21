@@ -32,6 +32,7 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
     private final ConfigTemplateScanner configTemplateScanner;
     private final MethodTaintSummarizer taintSummarizer;
     private final TaintFlowVerifier taintFlowVerifier;
+    private final TransitiveSinkResolver transitiveSinkResolver;
 
     public WhiteBoxAnalysisServiceImpl(
             List<EntryPointDiscoverer> entryPointDiscoverers
@@ -48,6 +49,7 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
         this.configTemplateScanner = new ConfigTemplateScanner();
         this.taintSummarizer = new MethodTaintSummarizer();
         this.taintFlowVerifier = new TaintFlowVerifier();
+        this.transitiveSinkResolver = new TransitiveSinkResolver();
     }
 
     @Override
@@ -80,43 +82,48 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
         SourceIndex finalIndex = sourceIndex.withAdditionalSinks(llmReviewedSinks);
 
         CallGraph callGraph = callGraphBuilder.build(finalIndex);
+
+        List<Sink> transitiveSinks = transitiveSinkResolver.resolve(
+                finalIndex, callGraph);
+        SourceIndex enrichedIndex = finalIndex.withAdditionalSinks(transitiveSinks);
+
         List<EntryPoint> entryPoints = entryPointBinder.bind(
                 discovered,
-                finalIndex
+                enrichedIndex
         );
         List<CandidatePath> candidates = candidatePathFinder.find(
                 entryPoints,
-                finalIndex,
+                enrichedIndex,
                 callGraph
         );
 
         Map<String, TaintSummary> taintSummaries =
-                taintSummarizer.summarizeAll(finalIndex.methods());
+                taintSummarizer.summarizeAll(enrichedIndex.methods());
         List<CandidatePath> taintVerifiedCandidates =
                 taintFlowVerifier.verify(candidates, taintSummaries);
 
         List<StorageWritePath> writePaths = storageWritePathFinder.find(
                 entryPoints,
-                finalIndex,
+                enrichedIndex,
                 callGraph
         );
         List<StoredCandidate> storedCandidates =
                 storedCandidateCorrelator.correlate(
                         writePaths,
                         taintVerifiedCandidates,
-                        finalIndex
+                        enrichedIndex
                 );
         return new AnalysisResult(
                 entryPoints,
-                finalIndex.sinks(),
+                enrichedIndex.sinks(),
                 taintVerifiedCandidates,
-                finalIndex.storageAccesses(),
+                enrichedIndex.storageAccesses(),
                 storedCandidates,
                 callGraph.unresolvedCalls(),
-                finalIndex.parseErrors(),
+                enrichedIndex.parseErrors(),
                 coverageCalculator.calculate(
                         sourceRoot,
-                        finalIndex,
+                        enrichedIndex,
                         callGraph,
                         entryPoints,
                         taintVerifiedCandidates,

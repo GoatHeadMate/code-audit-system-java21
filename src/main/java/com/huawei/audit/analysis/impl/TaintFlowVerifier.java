@@ -94,12 +94,14 @@ final class TaintFlowVerifier {
                         case "replace" -> "via String.replace() template substitution";
                         case "format" -> "via String.format()";
                         case "concatenation" -> "via string concatenation";
+                        case "split" -> "via String.split() preserving taint in array elements";
                         case "constructor-arg" -> "via constructor parameter";
                         default -> "via direct argument passing";
                     };
 
                     if ("replace".equals(flow.propagationType())
-                            || "format".equals(flow.propagationType())) {
+                            || "format".equals(flow.propagationType())
+                            || "split".equals(flow.propagationType())) {
                         hasStringPropagation = true;
                     }
 

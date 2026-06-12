@@ -18,12 +18,14 @@ final class MethodTaintSummarizer {
             "format", "formatted",
             "concat", "substring", "trim", "strip",
             "toLowerCase", "toUpperCase",
-            "append", "insert", "toString"
+            "append", "insert", "toString",
+            "split"
     );
     private static final Set<String> TAINT_PROPAGATOR_METHODS = Set.of(
             "replace", "replaceAll", "replaceFirst",
             "format", "formatted",
-            "append"
+            "append",
+            "split"
     );
 
     Map<String, TaintSummary> summarizeAll(List<MethodNode> methods) {
@@ -135,6 +137,9 @@ final class MethodTaintSummarizer {
         }
         if ("append".equals(methodName)) {
             return "concatenation";
+        }
+        if ("split".equals(methodName)) {
+            return "split";
         }
         if ("<init>".equals(methodName)) {
             return "constructor-arg";
