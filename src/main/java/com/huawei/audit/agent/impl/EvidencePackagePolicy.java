@@ -13,7 +13,8 @@ final class EvidencePackagePolicy {
     private static final Map<String, Set<String>> HUNTER_SINKS = Map.ofEntries(
             Map.entry("command_injection", Set.of(
                     "COMMAND_EXECUTION",
-                    "NATIVE_LIBRARY"
+                    "NATIVE_LIBRARY",
+                    "SERVLET_ENTRY"
             )),
             Map.entry("deserialization", Set.of(
                     "NATIVE_DESERIALIZATION",
@@ -56,7 +57,9 @@ final class EvidencePackagePolicy {
                     "JNDI_LOOKUP",
                     "NATIVE_LIBRARY",
                     "FILE_WRITE",
-                    "OUTBOUND_HTTP"
+                    "OUTBOUND_HTTP",
+                    "SERVLET_ENTRY",
+                    "FILTER_ENTRY"
             ))
     );
 

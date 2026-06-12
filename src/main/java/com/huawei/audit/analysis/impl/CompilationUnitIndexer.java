@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
     private final CompilationUnitTree unit;
@@ -69,6 +70,14 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
         if (tree.getExtendsClause() != null) {
             registerImplementation(tree.getExtendsClause().toString(), className);
         }
+        String extendsClass = tree.getExtendsClause() != null
+                ? AnalysisTextUtils.simpleName(
+                        tree.getExtendsClause().toString())
+                : "";
+        Set<String> implInterfaces = tree.getImplementsClause().stream()
+                .map(impl -> AnalysisTextUtils.simpleName(impl.toString()))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
         classes.push(new ClassContext(
                 className,
                 Map.copyOf(fieldTypes),
@@ -78,7 +87,9 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                         "WebEndpoint",
                         "ControllerEndpoint",
                         "RestControllerEndpoint"
-                )
+                ),
+                extendsClass,
+                Set.copyOf(implInterfaces)
         ));
         super.visitClass(tree, unused);
         classes.pop();
@@ -123,6 +134,31 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                     "sink-" + (sinks.size() + 1),
                     "ACTUATOR_ENDPOINT",
                     "Spring Actuator operation",
+                    methodId,
+                    filePath,
+                    startLine,
+                    sourceText(tree, 500)
+            ));
+        }
+        if ("HttpServlet".equals(owner.extendsClass())
+                && Set.of("doGet", "doPost", "doPut", "doDelete", "service")
+                        .contains(methodName)) {
+            sinks.add(new Sink(
+                    "sink-" + (sinks.size() + 1),
+                    "SERVLET_ENTRY",
+                    "HttpServlet." + methodName,
+                    methodId,
+                    filePath,
+                    startLine,
+                    sourceText(tree, 500)
+            ));
+        }
+        if (owner.implementsInterfaces().contains("Filter")
+                && "doFilter".equals(methodName)) {
+            sinks.add(new Sink(
+                    "sink-" + (sinks.size() + 1),
+                    "FILTER_ENTRY",
+                    "Filter.doFilter",
                     methodId,
                     filePath,
                     startLine,
@@ -197,6 +233,8 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
     private record ClassContext(
             String className,
             Map<String, String> fieldTypes,
-            boolean actuatorEndpoint
+            boolean actuatorEndpoint,
+            String extendsClass,
+            Set<String> implementsInterfaces
     ) { }
 }
