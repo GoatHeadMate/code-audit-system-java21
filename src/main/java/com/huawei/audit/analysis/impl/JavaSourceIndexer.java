@@ -24,7 +24,7 @@ final class JavaSourceIndexer {
     private static final int SOURCE_BATCH_SIZE = 128;
     private static final int MAX_PARSE_ERRORS = 1_000;
 
-    SourceIndex build(Path sourceRoot) throws Exception {
+    SourceIndex build(Path sourceRoot, List<DangerousSinkClassifier.ExtraSinkRule> extraRules) throws Exception {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         if (compiler == null) {
             throw new IllegalStateException(
@@ -61,7 +61,8 @@ final class JavaSourceIndexer {
                     sinks,
                     implementations,
                     parseErrors,
-                    methodSequence
+                    methodSequence,
+                    extraRules
             );
         }
         List<Sink> taintSinks = new MethodTaintAnalyzer().findTaintSinks(
@@ -79,7 +80,8 @@ final class JavaSourceIndexer {
             List<Sink> sinks,
             Map<String, Set<String>> implementations,
             List<String> parseErrors,
-            AtomicInteger methodSequence
+            AtomicInteger methodSequence,
+            List<DangerousSinkClassifier.ExtraSinkRule> extraRules
     ) throws Exception {
         try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(
                 null,
@@ -108,7 +110,8 @@ final class JavaSourceIndexer {
                         methods,
                         sinks,
                         implementations,
-                        methodSequence
+                        methodSequence,
+                        extraRules
                 );
             }
         }
@@ -121,7 +124,8 @@ final class JavaSourceIndexer {
             List<MethodNode> methods,
             List<Sink> sinks,
             Map<String, Set<String>> implementations,
-            AtomicInteger methodSequence
+            AtomicInteger methodSequence,
+            List<DangerousSinkClassifier.ExtraSinkRule> extraRules
     ) throws Exception {
         Path file = Path.of(unit.getSourceFile().toUri());
         new CompilationUnitIndexer(
@@ -132,7 +136,8 @@ final class JavaSourceIndexer {
                 methods,
                 sinks,
                 implementations,
-                methodSequence
+                methodSequence,
+                extraRules
         ).scan(unit, null);
     }
 }

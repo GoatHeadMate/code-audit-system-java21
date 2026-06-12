@@ -9,7 +9,8 @@ public interface EvidencePreparationService {
     PreparationResult prepare(
             AuditJob job,
             Path sourceRoot,
-            List<String> hunters
+            List<String> hunters,
+            List<Map<String, String>> dependencies
     ) throws Exception;
 
     record PreparationResult(

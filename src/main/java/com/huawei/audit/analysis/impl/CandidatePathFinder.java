@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 final class CandidatePathFinder {
-    private static final int MAX_PATH_DEPTH = 12;
+    private static final int MAX_PATH_DEPTH = 20;
     private static final int MAX_CANDIDATES = 1_000;
 
     List<CandidatePath> find(
@@ -70,7 +70,9 @@ final class CandidatePathFinder {
                                 state.edges(),
                                 confidence(state.edges()),
                                 state.edges().size(),
-                                "PENDING_CLAUDE_REVIEW"
+                                "PENDING_CLAUDE_REVIEW",
+                                "PENDING",
+                                List.of()
                         ));
                     }
                 }

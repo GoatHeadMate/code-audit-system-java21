@@ -25,7 +25,7 @@ class IntelligentAuditGraphTest {
         AuditJob job = new AuditJob("graph123", "java");
         job.workDir(Path.of("workspace", "audit_graph123"));
 
-        when(evidence.prepare(any(), any(), any())).thenReturn(
+        when(evidence.prepare(any(), any(), any(), any())).thenReturn(
                 new EvidencePreparationService.PreparationResult(
                         Map.of(
                                 "sql_injection", "evidence/sql_injection.json",

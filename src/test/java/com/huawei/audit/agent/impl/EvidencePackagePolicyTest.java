@@ -10,11 +10,11 @@ class EvidencePackagePolicyTest {
     void mapsEveryConfiguredHunterToAtLeastOneSinkCategory() {
         Map<String, String> expected = Map.of(
                 "sql_injection", "SQL_EXECUTION",
-                "xss", "HTTP_RESPONSE_WRITE",
-                "xxe", "XML_PARSE",
-                "actuator", "ACTUATOR_ENDPOINT",
-                "crlf_injection", "HTTP_HEADER_WRITE",
-                "open_redirect", "HTTP_REDIRECT"
+                "http_output", "HTTP_RESPONSE_WRITE",
+                "unsafe_parsing", "XML_PARSE",
+                "component_vulns", "ACTUATOR_ENDPOINT",
+                "code_execution", "COMMAND_EXECUTION",
+                "file_operations", "FILE_WRITE"
         );
 
         expected.forEach((hunter, category) ->

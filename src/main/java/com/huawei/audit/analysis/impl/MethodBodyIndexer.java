@@ -26,8 +26,7 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
     private final List<CallSite> calls = new ArrayList<>();
     private final List<String> methodReferences = new ArrayList<>();
     private final List<StorageAccess> storageAccesses = new ArrayList<>();
-    private final DangerousSinkClassifier sinkClassifier =
-            new DangerousSinkClassifier();
+    private final DangerousSinkClassifier sinkClassifier;
     private final StorageAccessClassifier storageClassifier =
             new StorageAccessClassifier();
 
@@ -35,12 +34,14 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
             CompilationUnitIndexer source,
             String methodId,
             Map<String, String> variableTypes,
-            List<Sink> sinks
+            List<Sink> sinks,
+            List<DangerousSinkClassifier.ExtraSinkRule> extraRules
     ) {
         this.source = source;
         this.methodId = methodId;
         this.variableTypes = variableTypes;
         this.sinks = sinks;
+        this.sinkClassifier = new DangerousSinkClassifier(extraRules);
     }
 
     @Override
@@ -108,12 +109,25 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
             addSink("DYNAMIC_LOADING", "new URLClassLoader", tree);
         } else if ("RedirectView".equals(type)) {
             addSink("HTTP_REDIRECT", "new RedirectView", tree);
-        } else if (Set.of(
+        } else         if (Set.of(
                 "FileOutputStream",
                 "FileWriter",
                 "RandomAccessFile"
         ).contains(type)) {
             addSink("FILE_WRITE", "new " + type, tree);
+        }
+        if (tree.getArguments() != null && !tree.getArguments().isEmpty()) {
+            calls.add(new CallSite(
+                    "<init>",
+                    "",
+                    type,
+                    tree.getArguments().size(),
+                    tree.getArguments().stream()
+                            .map(this::expressionType)
+                            .toList(),
+                    source.line(tree, true),
+                    source.sourceText(tree, 500)
+            ));
         }
         return super.visitNewClass(tree, unused);
     }

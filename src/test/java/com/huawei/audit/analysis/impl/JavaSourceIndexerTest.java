@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,7 +24,7 @@ class JavaSourceIndexerTest {
             );
         }
 
-        SourceIndex result = new JavaSourceIndexer().build(tempDir);
+        SourceIndex result = new JavaSourceIndexer().build(tempDir, List.of());
 
         assertThat(result.methods()).hasSize(280);
         assertThat(result.parseErrors()).isEmpty();

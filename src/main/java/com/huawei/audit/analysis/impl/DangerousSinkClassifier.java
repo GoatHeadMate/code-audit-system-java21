@@ -1,9 +1,20 @@
 package com.huawei.audit.analysis.impl;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 final class DangerousSinkClassifier {
+    private final List<ExtraSinkRule> extraRules;
+
+    DangerousSinkClassifier() {
+        this.extraRules = List.of();
+    }
+
+    DangerousSinkClassifier(List<ExtraSinkRule> extraRules) {
+        this.extraRules = extraRules == null ? List.of() : List.copyOf(extraRules);
+    }
+
     SinkMatch classify(
             String method,
             String expression,
@@ -68,6 +79,12 @@ final class DangerousSinkClassifier {
         if (Set.of("load", "loadLibrary").contains(method)
                 && expression.startsWith("System.")) {
             return match("NATIVE_LIBRARY", expression);
+        }
+        for (ExtraSinkRule rule : extraRules) {
+            if (rule.methodNamePattern().equals(method)
+                    && lowerType.contains(rule.receiverTypePattern())) {
+                return match(rule.category(), expression);
+            }
         }
         return null;
     }
@@ -257,4 +274,10 @@ final class DangerousSinkClassifier {
     }
 
     record SinkMatch(String category, String api) { }
+
+    record ExtraSinkRule(
+            String methodNamePattern,
+            String receiverTypePattern,
+            String category
+    ) { }
 }

@@ -19,7 +19,9 @@ final class CoverageCalculator {
             CallGraph callGraph,
             List<EntryPoint> entryPoints,
             List<CandidatePath> candidates,
-            List<StoredCandidate> storedCandidates
+            List<StoredCandidate> storedCandidates,
+            long llmExpandedRules,
+            long llmReviewedSinks
     ) throws IOException {
         long javaFiles;
         try (var files = Files.walk(sourceRoot)) {
@@ -64,7 +66,9 @@ final class CoverageCalculator {
                         candidate -> candidate.sink().category(),
                         LinkedHashMap::new,
                         Collectors.counting()
-                ))
+                )),
+                llmExpandedRules,
+                llmReviewedSinks
         );
     }
 

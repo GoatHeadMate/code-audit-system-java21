@@ -168,6 +168,7 @@ class ConfigTemplateScannerTest {
                 className,
                 methodName,
                 parameterCount,
+                List.of(),
                 className + ".java",
                 1,
                 10,

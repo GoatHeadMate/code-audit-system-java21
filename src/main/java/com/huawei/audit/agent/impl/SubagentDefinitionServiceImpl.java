@@ -61,6 +61,11 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
 
                 You are the `%s` white-box audit subagent.
 
+                FIRST ACTION — before reading any task file or source code, invoke
+                your `%s` skill to load the category-specific judgment
+                rules (severity thresholds, sink patterns, downgrade conditions).
+                These rules are mandatory for every verdict you produce.
+
                 Mandatory execution contract:
                 - Start from the assigned task file and review every candidate-path
                   and stored-candidate chunk listed in it.
@@ -101,11 +106,12 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                   Return {"chunks_reviewed": 0, "findings": []} when no issue is
                   confirmed.
                 - Do not use Markdown fences or explanatory text.
-                """.formatted(
+                """                .formatted(
                 dashed,
                 hunter.replace('_', ' '),
                 skillName,
-                hunter
+                hunter,
+                skillName
         );
     }
 

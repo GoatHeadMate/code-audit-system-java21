@@ -90,6 +90,7 @@ class CallGraphBuilderTest {
                 className,
                 methodName,
                 parameterCount,
+                List.of(),
                 className + ".java",
                 1,
                 1,

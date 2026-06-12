@@ -62,7 +62,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir);
+        ).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.coverage().discoveredEntryPoints()).isEqualTo(1);
         assertThat(result.coverage().boundEntryPoints()).isEqualTo(1);
@@ -136,7 +136,7 @@ class WhiteBoxAnalysisServiceTest {
         var result = new WhiteBoxAnalysisServiceImpl(List.of(
                 new HttpEndpointScanner(),
                 new AsyncEntryPointDiscoverer()
-        )).analyze(tempDir);
+        )).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.storageAccesses())
                 .extracting(access ->
@@ -200,7 +200,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new AsyncEntryPointDiscoverer())
-        ).analyze(tempDir);
+        ).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.storedCandidates())
                 .singleElement()
@@ -308,7 +308,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir);
+        ).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.candidatePaths())
                 .filteredOn(candidate ->
@@ -363,7 +363,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir);
+        ).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.candidatePaths())
                 .extracting(candidate -> candidate.sink().category())
@@ -393,7 +393,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir);
+        ).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.candidatePaths())
                 .singleElement()
@@ -434,10 +434,138 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir);
+        ).analyze(tempDir, List.of(), null, "claude");
 
         assertThat(result.candidatePaths())
                 .filteredOn(c -> c.sink().category().equals("COMMAND_EXECUTION"))
                 .isNotEmpty();
+    }
+
+    @Test
+    void detectsTemplateSubstitutionCommandInjectionThroughAsyncExecution()
+            throws Exception {
+        Files.writeString(tempDir.resolve("CollectionController.java"), """
+                import org.springframework.web.bind.annotation.*;
+                import java.util.Map;
+
+                @RestController
+                class CollectionController {
+                    private TaskCreator creator;
+
+                    @PostMapping("/task")
+                    void createTask(@RequestBody TaskRequest request) {
+                        creator.createMainTask(request);
+                    }
+                }
+                """);
+
+        Files.writeString(tempDir.resolve("TaskCreator.java"), """
+                import java.util.concurrent.ExecutorService;
+
+                class TaskCreator {
+                    private ExecutorService pool;
+
+                    void createMainTask(TaskRequest request) {
+                        TaskExecutor executor = new TaskExecutor(
+                                request.getExtensionParams()
+                        );
+                        pool.submit(executor);
+                    }
+                }
+                """);
+
+        Files.writeString(tempDir.resolve("TaskExecutor.java"), """
+                import java.util.Map;
+
+                class TaskExecutor implements Runnable {
+                    private Map<String, String> extensionParams;
+
+                    TaskExecutor(Map<String, String> extensionParams) {
+                        this.extensionParams = extensionParams;
+                    }
+
+                    public void run() {
+                        executeCollection();
+                    }
+
+                    private void executeCollection() {
+                        CollectorStrategy strategy = new RestCollectorStrategy();
+                        strategy.collect(extensionParams);
+                    }
+                }
+                """);
+
+        Files.writeString(tempDir.resolve("CollectorStrategy.java"), """
+                import java.util.Map;
+
+                interface CollectorStrategy {
+                    void collect(Map<String, String> params);
+                }
+                """);
+
+        Files.writeString(tempDir.resolve("RestCollectorStrategy.java"), """
+                import java.util.Map;
+
+                class RestCollectorStrategy implements CollectorStrategy {
+                    public void collect(Map<String, String> params) {
+                        String query = "hgetAll DeviceRecord:${dn}";
+                        String replaced = QueryUtil.generateQuery(query, params);
+                        executeCommand(replaced);
+                    }
+
+                    private void executeCommand(String command) {
+                        try {
+                            String cmd = "source /opt/profile.sh && tool --query \\"" + command + "\\"";
+                            new ProcessBuilder("/bin/bash", "-c", cmd).start();
+                        } catch (Exception ignored) {}
+                    }
+                }
+                """);
+
+        Files.writeString(tempDir.resolve("QueryUtil.java"), """
+                import java.util.Map;
+
+                class QueryUtil {
+                    static String generateQuery(String template, Map<String, String> params) {
+                        String result = template;
+                        for (Map.Entry<String, String> entry : params.entrySet()) {
+                            result = result.replace("${" + entry.getKey() + "}", entry.getValue());
+                        }
+                        return result;
+                    }
+                }
+                """);
+
+        Files.writeString(tempDir.resolve("TaskRequest.java"), """
+                import java.util.Map;
+
+                class TaskRequest {
+                    Map<String, String> extensionParams;
+                    Map<String, String> getExtensionParams() { return extensionParams; }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir, List.of(), null, "claude");
+
+        assertThat(result.candidatePaths())
+                .filteredOn(c -> c.entryPoint().path().equals("/task"))
+                .filteredOn(c -> c.sink().category().equals("COMMAND_EXECUTION"))
+                .isNotEmpty()
+                .anySatisfy(candidate -> {
+                    assertThat(candidate.methodPath())
+                            .extracting(step -> step.className())
+                            .contains("CollectionController", "RestCollectorStrategy");
+                    assertThat(candidate.taintConfidence())
+                            .isIn("CONFIRMED", "LIKELY");
+                });
+
+        assertThat(result.taintSummaries())
+                .anySatisfy((methodId, summary) -> {
+                    if (methodId.contains("RestCollectorStrategy#collect")) {
+                        assertThat(summary.hasTaintPropagation()).isTrue();
+                    }
+                });
     }
 }

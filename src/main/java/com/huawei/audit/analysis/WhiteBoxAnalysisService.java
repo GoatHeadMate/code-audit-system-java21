@@ -3,9 +3,15 @@ package com.huawei.audit.analysis;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public interface WhiteBoxAnalysisService {
-    AnalysisResult analyze(Path sourceRoot) throws Exception;
+    AnalysisResult analyze(
+            Path sourceRoot,
+            List<Map<String, String>> dependencies,
+            com.huawei.audit.process.ProcessRunner processRunner,
+            String claudeBin
+    ) throws Exception;
 
     record EntryPoint(
             String id,
@@ -39,6 +45,7 @@ public interface WhiteBoxAnalysisService {
             String className,
             String methodName,
             int parameterCount,
+            List<String> parameterNames,
             String filePath,
             int startLine,
             int endLine,
@@ -85,7 +92,9 @@ public interface WhiteBoxAnalysisService {
             List<CallEdge> callEdges,
             String staticConfidence,
             int callDepth,
-            String reviewStatus
+            String reviewStatus,
+            String taintConfidence,
+            List<String> taintTrace
     ) { }
 
     record StorageAccess(
@@ -142,7 +151,25 @@ public interface WhiteBoxAnalysisService {
             double entryBindingRate,
             Map<String, Long> entryPointsByDiscoverer,
             Map<String, Long> sinksByCategory,
-            Map<String, Long> candidatePathsBySink
+            Map<String, Long> candidatePathsBySink,
+            long llmExpandedRules,
+            long llmReviewedSinks
+    ) { }
+
+    record TaintFlow(
+            int sourceParamIndex,
+            String targetCallMethodName,
+            String targetCallReceiver,
+            int targetArgIndex,
+            String propagationType
+    ) { }
+
+    record TaintSummary(
+            String methodId,
+            List<TaintFlow> parameterFlows,
+            Set<Integer> paramsThatReachReturn,
+            boolean hasStringManipulation,
+            boolean hasTaintPropagation
     ) { }
 
     record AnalysisResult(
@@ -153,6 +180,7 @@ public interface WhiteBoxAnalysisService {
             List<StoredCandidate> storedCandidates,
             List<UnresolvedCall> unresolvedCalls,
             List<String> parserDiagnostics,
-            Coverage coverage
+            Coverage coverage,
+            Map<String, TaintSummary> taintSummaries
     ) { }
 }

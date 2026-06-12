@@ -48,7 +48,9 @@ class EvidencePreparationServiceTest {
                 new WhiteBoxAnalysisServiceImpl(List.of(endpoints)),
                 new ObjectMapper(),
                 new JobLogBroker(),
-                TEST_PROPERTIES
+                TEST_PROPERTIES,
+                null,
+                null
         );
         AuditJob job = new AuditJob("evidence1", "java");
         job.workDir(tempDir.resolve("audit_evidence1"));
@@ -57,10 +59,11 @@ class EvidencePreparationServiceTest {
         var result = service.prepare(
                 job,
                 source,
-                List.of("command_injection")
+                List.of("code_execution"),
+                List.of()
         );
 
-        Path task = Path.of(result.manifest().get("command_injection"));
+        Path task = Path.of(result.manifest().get("code_execution"));
         assertThat(task).isRegularFile();
         String taskJson = Files.readString(task);
         assertThat(taskJson)
@@ -119,15 +122,17 @@ class EvidencePreparationServiceTest {
                 )),
                 mapper,
                 new JobLogBroker(),
-                TEST_PROPERTIES
+                TEST_PROPERTIES,
+                null,
+                null
         );
         AuditJob job = new AuditJob("stored1", "java");
         job.workDir(tempDir.resolve("audit_stored1"));
         Files.createDirectories(job.workDir());
 
-        var result = service.prepare(job, source, List.of("ssti"));
+        var result = service.prepare(job, source, List.of("code_execution"), List.of());
         var task = mapper.readTree(
-                Path.of(result.manifest().get("ssti")).toFile()
+                Path.of(result.manifest().get("code_execution")).toFile()
         );
 
         assertThat(task.path("stored_candidate_count").asInt()).isEqualTo(1);
@@ -168,7 +173,9 @@ class EvidencePreparationServiceTest {
                 )),
                 mapper,
                 new JobLogBroker(),
-                TEST_PROPERTIES
+                TEST_PROPERTIES,
+                null,
+                null
         );
         AuditJob job = new AuditJob("large1", "java");
         job.workDir(tempDir.resolve("audit_large1"));
@@ -177,10 +184,11 @@ class EvidencePreparationServiceTest {
         var result = service.prepare(
                 job,
                 source,
-                List.of("command_injection")
+                List.of("code_execution"),
+                List.of()
         );
         var task = mapper.readTree(
-                Path.of(result.manifest().get("command_injection")).toFile()
+                Path.of(result.manifest().get("code_execution")).toFile()
         );
 
         assertThat(task.path("candidate_count").asInt()).isEqualTo(6);

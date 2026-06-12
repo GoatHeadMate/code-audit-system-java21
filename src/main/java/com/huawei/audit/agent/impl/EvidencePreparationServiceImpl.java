@@ -6,8 +6,10 @@ import com.huawei.audit.analysis.WhiteBoxAnalysisService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CandidatePath;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StoredCandidate;
 import com.huawei.audit.config.AuditProperties;
+import com.huawei.audit.config.RuntimeExecutables;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.process.ProcessRunner;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -28,6 +30,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final WhiteBoxAnalysisService analysisService;
     private final ObjectMapper objectMapper;
     private final JobLogBroker logs;
+    private final ProcessRunner processRunner;
+    private final RuntimeExecutables executables;
     private final Semaphore analysisSlot = new Semaphore(1, true);
     private final long analysisTimeoutMs;
 
@@ -35,19 +39,24 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             WhiteBoxAnalysisService analysisService,
             ObjectMapper objectMapper,
             JobLogBroker logs,
-            AuditProperties properties
+            AuditProperties properties,
+            ProcessRunner processRunner,
+            RuntimeExecutables executables
     ) {
         this.analysisService = analysisService;
         this.objectMapper = objectMapper;
         this.logs = logs;
         this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
+        this.processRunner = processRunner;
+        this.executables = executables;
     }
 
     @Override
     public PreparationResult prepare(
             AuditJob job,
             Path sourceRoot,
-            List<String> hunters
+            List<String> hunters,
+            List<Map<String, String>> dependencies
     ) throws Exception {
         Path evidenceDirectory = job.workDir().resolve("evidence");
         Path analysisDirectory = evidenceDirectory.resolve("whitebox");
@@ -55,7 +64,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         Files.createDirectories(analysisDirectory);
         Files.createDirectories(packageDirectory);
 
-        var analysis = runWhiteBoxAnalysis(job, sourceRoot);
+        var analysis = runWhiteBoxAnalysis(job, sourceRoot, dependencies);
         writeJson(analysisDirectory.resolve("entrypoints.json"), analysis.entryPoints());
         writeJson(analysisDirectory.resolve("sinks.json"), analysis.sinks());
         writeJson(analysisDirectory.resolve("storage-accesses.json"), analysis.storageAccesses());
@@ -179,7 +188,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
 
     private WhiteBoxAnalysisService.AnalysisResult runWhiteBoxAnalysis(
             AuditJob job,
-            Path sourceRoot
+            Path sourceRoot,
+            List<Map<String, String>> dependencies
     ) throws Exception {
         if (!analysisSlot.tryAcquire()) {
             logs.publish(job, "[whitebox] waiting for the active analysis to release memory");
@@ -192,7 +202,12 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                     job,
                     "[whitebox] indexing source in bounded batches"
             );
-            return analysisService.analyze(sourceRoot);
+            return analysisService.analyze(
+                    sourceRoot,
+                    dependencies,
+                    processRunner,
+                    executables == null ? null : executables.claude()
+            );
         } finally {
             analysisSlot.release();
         }

@@ -25,14 +25,12 @@ public class SupervisorAgent {
             Pattern.CASE_INSENSITIVE
     );
     private static final List<String> MANDATORY = List.of(
-            "command_injection",
+            "code_execution",
             "authorization",
-            "deserialization",
-            "file_upload",
-            "ssti",
-            "h2_rce",
-            "log4j_jndi",
-            "ssrf"
+            "unsafe_parsing",
+            "file_operations",
+            "ssrf",
+            "component_vulns"
     );
 
     private final ClaudeCodeSupervisorModel model;
@@ -140,9 +138,9 @@ public class SupervisorAgent {
                 1. Delegate each selected category to its matching Agent subagent.
                 2. Launch independent subagents in parallel in a single delegation wave
                    whenever possible.
-                3. Command injection, authorization, deserialization, file upload, H2 RCE,
-                   Log4j JNDI, SSRF and SSTI are mandatory when available because they can
-                   directly enable RCE or materially affect remote reachability.
+                3. Code execution, authorization, unsafe parsing, file operations, SSRF
+                   and component vulnerabilities are mandatory when available because they
+                   can directly enable RCE or materially affect remote reachability.
                 4. Delegate no more than the configured maximum and never invent names.
                 5. Give each subagent its exact task file path and source root path.
                    In the prompt to each subagent, include the literal string:

@@ -13,21 +13,14 @@ import org.springframework.stereotype.Component;
 @Component
 public class HunterScheduler {
     private static final List<String> ORDERED_HUNTERS = List.of(
-            "command_injection",
+            "code_execution",
             "sql_injection",
-            "log4j_jndi",
-            "path_traversal",
-            "xss",
-            "actuator",
-            "file_upload",
-            "h2_rce",
+            "unsafe_parsing",
             "ssrf",
-            "ssti",
-            "xxe",
+            "file_operations",
+            "http_output",
             "authorization",
-            "crlf_injection",
-            "deserialization",
-            "open_redirect"
+            "component_vulns"
     );
 
     private final Path promptRoot = Path.of("hunter-prompts").toAbsolutePath().normalize();
@@ -40,7 +33,7 @@ public class HunterScheduler {
                 .toList();
 
         Set<String> boosted = new LinkedHashSet<>();
-        boosted.add("command_injection");
+        boosted.add("code_execution");
         boosted.add("authorization");
 
         String orm = String.valueOf(techProfile.getOrDefault("orm", ""));
@@ -54,13 +47,10 @@ public class HunterScheduler {
         List<Map<String, String>> deps = (List<Map<String, String>>)
                 techProfile.getOrDefault("dependencies", List.of());
 
-        if (hasDep(deps, "h2")) boosted.add("h2_rce");
-        if (hasDep(deps, "log4j")) boosted.add("log4j_jndi");
+        if (hasDep(deps, "h2") || hasDep(deps, "log4j")
+                || hasDep(deps, "actuator")) boosted.add("component_vulns");
         if (hasDep(deps, "fastjson") || hasDep(deps, "xstream")
-                || hasDep(deps, "snakeyaml")) boosted.add("deserialization");
-        if (hasDep(deps, "freemarker") || hasDep(deps, "velocity")
-                || hasDep(deps, "thymeleaf")) boosted.add("ssti");
-        if (hasDep(deps, "actuator")) boosted.add("actuator");
+                || hasDep(deps, "snakeyaml")) boosted.add("unsafe_parsing");
 
         List<String> result = new ArrayList<>();
         for (String hunter : available) {

@@ -104,10 +104,14 @@ public class IntelligentAuditGraph {
                 context.job().workDir(),
                 state.candidates()
         );
+        @SuppressWarnings("unchecked")
+        List<Map<String, String>> dependencies = (List<Map<String, String>>)
+                context.techProfile().getOrDefault("dependencies", List.of());
         var preparation = evidencePreparation.prepare(
                 context.job(),
                 context.sourceRoot(),
-                state.candidates()
+                state.candidates(),
+                dependencies
         );
         return Map.of(
                 "evidence_manifest", preparation.manifest(),

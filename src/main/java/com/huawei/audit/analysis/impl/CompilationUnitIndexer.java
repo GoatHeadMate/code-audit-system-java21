@@ -30,6 +30,7 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
     private final List<Sink> sinks;
     private final Map<String, Set<String>> implementations;
     private final AtomicInteger methodSequence;
+    private final List<DangerousSinkClassifier.ExtraSinkRule> extraRules;
     private final Deque<ClassContext> classes = new ArrayDeque<>();
 
     CompilationUnitIndexer(
@@ -40,7 +41,8 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
             List<MethodNode> methods,
             List<Sink> sinks,
             Map<String, Set<String>> implementations,
-            AtomicInteger methodSequence
+            AtomicInteger methodSequence,
+            List<DangerousSinkClassifier.ExtraSinkRule> extraRules
     ) {
         this.unit = unit;
         this.positions = positions;
@@ -50,6 +52,7 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
         this.sinks = sinks;
         this.implementations = implementations;
         this.methodSequence = methodSequence;
+        this.extraRules = extraRules;
     }
 
     @Override
@@ -117,12 +120,16 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                     AnalysisTextUtils.simpleName(parameter.getType().toString())
             );
         }
+        List<String> parameterNames = tree.getParameters().stream()
+                .map(parameter -> parameter.getName().toString())
+                .toList();
 
         MethodBodyIndexer body = new MethodBodyIndexer(
                 this,
                 methodId,
                 variableTypes,
-                sinks
+                sinks,
+                extraRules
         );
         if (owner.actuatorEndpoint() && hasAnnotation(
                 tree.getModifiers().getAnnotations(),
@@ -171,6 +178,7 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                 owner.className(),
                 methodName,
                 tree.getParameters().size(),
+                List.copyOf(parameterNames),
                 filePath,
                 startLine,
                 line(tree, false),

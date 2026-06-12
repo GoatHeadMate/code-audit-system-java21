@@ -11,44 +11,20 @@ import java.util.Set;
 
 final class EvidencePackagePolicy {
     private static final Map<String, Set<String>> HUNTER_SINKS = Map.ofEntries(
-            Map.entry("command_injection", Set.of(
+            Map.entry("code_execution", Set.of(
                     "COMMAND_EXECUTION",
                     "NATIVE_LIBRARY",
-                    "SERVLET_ENTRY"
-            )),
-            Map.entry("deserialization", Set.of(
-                    "NATIVE_DESERIALIZATION",
-                    "DYNAMIC_LOADING"
-            )),
-            Map.entry("ssti", Set.of(
+                    "SERVLET_ENTRY",
                     "SCRIPT_OR_EXPRESSION_EXECUTION",
                     "DYNAMIC_LOADING"
             )),
-            Map.entry("log4j_jndi", Set.of("JNDI_LOOKUP")),
-            Map.entry("h2_rce", Set.of(
-                    "COMMAND_EXECUTION",
-                    "SCRIPT_OR_EXPRESSION_EXECUTION",
-                    "DYNAMIC_LOADING"
-            )),
-            Map.entry("file_upload", Set.of(
-                    "COMMAND_EXECUTION",
-                    "NATIVE_LIBRARY",
-                    "DYNAMIC_LOADING",
-                    "FILE_WRITE"
-            )),
+            Map.entry("sql_injection", Set.of("SQL_EXECUTION")),
             Map.entry("ssrf", Set.of(
                     "OUTBOUND_HTTP",
                     "COMMAND_EXECUTION",
                     "JNDI_LOOKUP",
                     "NATIVE_DESERIALIZATION"
             )),
-            Map.entry("path_traversal", Set.of("FILE_WRITE")),
-            Map.entry("sql_injection", Set.of("SQL_EXECUTION")),
-            Map.entry("xss", Set.of("HTTP_RESPONSE_WRITE")),
-            Map.entry("xxe", Set.of("XML_PARSE")),
-            Map.entry("actuator", Set.of("ACTUATOR_ENDPOINT")),
-            Map.entry("crlf_injection", Set.of("HTTP_HEADER_WRITE")),
-            Map.entry("open_redirect", Set.of("HTTP_REDIRECT")),
             Map.entry("authorization", Set.of(
                     "COMMAND_EXECUTION",
                     "SCRIPT_OR_EXPRESSION_EXECUTION",
@@ -60,6 +36,29 @@ final class EvidencePackagePolicy {
                     "OUTBOUND_HTTP",
                     "SERVLET_ENTRY",
                     "FILTER_ENTRY"
+            )),
+            Map.entry("unsafe_parsing", Set.of(
+                    "NATIVE_DESERIALIZATION",
+                    "DYNAMIC_LOADING",
+                    "XML_PARSE"
+            )),
+            Map.entry("http_output", Set.of(
+                    "HTTP_RESPONSE_WRITE",
+                    "HTTP_HEADER_WRITE",
+                    "HTTP_REDIRECT"
+            )),
+            Map.entry("file_operations", Set.of(
+                    "COMMAND_EXECUTION",
+                    "NATIVE_LIBRARY",
+                    "DYNAMIC_LOADING",
+                    "FILE_WRITE"
+            )),
+            Map.entry("component_vulns", Set.of(
+                    "ACTUATOR_ENDPOINT",
+                    "COMMAND_EXECUTION",
+                    "SCRIPT_OR_EXPRESSION_EXECUTION",
+                    "DYNAMIC_LOADING",
+                    "JNDI_LOOKUP"
             ))
     );
 

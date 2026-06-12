@@ -63,10 +63,10 @@ class SupervisorAgentTest {
                 Map.of("web_framework", "Spring Boot"),
                 List.of(
                         "sql_injection",
-                        "command_injection",
+                        "code_execution",
                         "authorization",
                         "ssrf",
-                        "xxe"
+                        "unsafe_parsing"
                 ),
                 Map.of(),
                 Map.of()
@@ -74,12 +74,12 @@ class SupervisorAgentTest {
 
         assertThat(result.selectedHunters())
                 .contains(
-                        "command_injection",
+                        "code_execution",
                         "authorization",
                         "ssrf"
                 )
                 .doesNotContain("not-a-real-agent")
-                .hasSizeLessThanOrEqualTo(15);
+                .hasSizeLessThanOrEqualTo(8);
         assertThat(result.findings()).hasSize(1);
     }
 
@@ -133,7 +133,7 @@ class SupervisorAgentTest {
                 Map.of(),
                 List.of(
                         "sql_injection",
-                        "command_injection",
+                        "code_execution",
                         "authorization"
                 ),
                 Map.of(),

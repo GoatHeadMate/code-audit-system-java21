@@ -126,6 +126,7 @@ class MethodTaintAnalyzerTest {
     ) {
         return new MethodNode(
                 id, className, methodName, parameterCount,
+                List.of(),
                 className + ".java", 1, 20, signature,
                 calls, Map.of(), List.of(), List.of()
         );
