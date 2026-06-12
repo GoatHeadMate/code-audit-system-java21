@@ -82,17 +82,20 @@ final class MethodTaintSummarizer {
                     }
                 }
                 if (TAINT_PROPAGATOR_METHODS.contains(call.methodName())) {
+                    Map<String, Set<Integer>> pendingMerges = new LinkedHashMap<>();
                     for (var taintEntry : variableTaint.entrySet()) {
                         if (expression.contains(taintEntry.getKey())
                                 && !taintEntry.getValue().isEmpty()) {
                             hasTaintProp = true;
                             if (receiver != null && !receiver.isBlank()) {
                                 String rootReceiver = receiver.split("[.\\[(]", 2)[0];
-                                variableTaint.computeIfAbsent(rootReceiver, k -> new HashSet<>())
+                                pendingMerges.computeIfAbsent(rootReceiver, k -> new HashSet<>())
                                         .addAll(taintEntry.getValue());
                             }
                         }
                     }
+                    pendingMerges.forEach((k, v) ->
+                            variableTaint.computeIfAbsent(k, x -> new HashSet<>()).addAll(v));
                 }
             }
         }
