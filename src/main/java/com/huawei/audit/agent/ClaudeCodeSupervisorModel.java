@@ -84,7 +84,12 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                             "--allowedTools", "Agent,SendMessage,Read,Glob,Grep",
                             "--disallowedTools",
                             "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch",
-                            "--add-dir", context.sourceRoot().toString()
+                            "--add-dir", context.sourceRoot().toString(),
+                            "--append-system-prompt",
+                            "You are in goal mode. Work autonomously toward the"
+                                    + " audit objective. Do not ask clarifying questions."
+                                    + " Break down the goal into subtasks, delegate to"
+                                    + " subagents, and synthesize results independently."
                     ),
                     context.workingDirectory(),
                     Map.of("CLAUDE_CODE_ENTRYPOINT", "langchain4j-supervisor"),
