@@ -43,6 +43,9 @@ public class ApiExceptionHandler {
             Exception exception,
             HttpServletRequest request
     ) {
+        if (isSseRequest(request)) {
+            return null;
+        }
         int status = exception instanceof ErrorResponse errorResponse
                 ? errorResponse.getStatusCode().value()
                 : HttpStatus.INTERNAL_SERVER_ERROR.value();
@@ -51,6 +54,11 @@ public class ApiExceptionHandler {
             detail = HttpStatus.valueOf(status).getReasonPhrase();
         }
         return response(status, detail, request);
+    }
+
+    private boolean isSseRequest(HttpServletRequest request) {
+        String accept = request.getHeader("Accept");
+        return accept != null && accept.contains("text/event-stream");
     }
 
     private ResponseEntity<Map<String, Object>> response(

@@ -15,6 +15,14 @@ public class AttackChainCorrelator {
             "CRITICAL", 4, "HIGH", 3, "MEDIUM", 2, "LOW", 1
     );
 
+    private static final Map<String, Set<String>> TYPE_ALIASES = Map.of(
+            "MISSING_AUTH", Set.of(
+                    "MISSING_AUTH", "UNAUTHORIZED_ACTION",
+                    "AUTHORIZATION_BYPASS", "VERTICAL_PRIVILEGE_ESCALATION"
+            ),
+            "WEAK_WHITELIST", Set.of("WEAK_WHITELIST", "SSRF")
+    );
+
     private static final List<ChainRule> RULES = List.of(
             new ChainRule("chain-ssrf-cmdinj", "SSRF -> Command Injection -> RCE",
                     Set.of("SSRF"), Set.of("COMMAND_INJECTION"), "CRITICAL", 0.80,
@@ -39,7 +47,28 @@ public class AttackChainCorrelator {
                     "Substring whitelist validation may be bypassed to exploit SSRF."),
             new ChainRule("chain-ssti-cmdinj", "Template Injection -> Command Execution",
                     Set.of("SSTI"), Set.of("COMMAND_INJECTION"), "CRITICAL", 0.75,
-                    "Template injection and command execution may combine into RCE.")
+                    "Template injection and command execution may combine into RCE."),
+            new ChainRule("chain-ssrf-whitelist-cmdinj",
+                    "SSRF Whitelist Bypass -> Command Injection -> RCE",
+                    Set.of("WEAK_WHITELIST"),
+                    Set.of("COMMAND_INJECTION"),
+                    "CRITICAL", 0.85,
+                    "SSRF with weak whitelist bypass may chain to an internal command injection endpoint. "
+                    + "If the proxy auto-injects admin credentials, the attacker gains authenticated RCE."),
+            new ChainRule("chain-ssrf-credential-injection",
+                    "SSRF + Credential Auto-Injection -> Authenticated SSRF",
+                    Set.of("SSRF"),
+                    Set.of("AUTHORIZATION_BYPASS", "UNAUTHORIZED_ACTION"),
+                    "CRITICAL", 0.80,
+                    "SSRF proxy automatically injects admin credentials into forwarded requests, "
+                    + "upgrading unauthenticated SSRF to authenticated admin-level access on internal APIs."),
+            new ChainRule("chain-unauth-ssrf-rce",
+                    "Missing Auth -> SSRF -> Internal RCE",
+                    Set.of("MISSING_AUTH", "UNAUTHORIZED_ACTION"),
+                    Set.of("SSRF", "COMMAND_INJECTION"),
+                    "CRITICAL", 0.90,
+                    "An unauthenticated endpoint proxies requests via SSRF to an internal command injection "
+                    + "endpoint, forming an unauthenticated RCE chain.")
     );
 
     public List<Map<String, Object>> correlate(
@@ -115,9 +144,25 @@ public class AttackChainCorrelator {
             Map<String, List<Map<String, Object>>> byType,
             Set<String> types
     ) {
-        return types.stream()
-                .flatMap(type -> byType.getOrDefault(type, List.of()).stream())
-                .toList();
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (String type : types) {
+            Set<String> aliases = TYPE_ALIASES.getOrDefault(type, Set.of(type));
+            for (String alias : aliases) {
+                List<Map<String, Object>> direct = byType.getOrDefault(alias, List.of());
+                if ("WEAK_WHITELIST".equals(type) && "SSRF".equals(alias)) {
+                    for (Map<String, Object> finding : direct) {
+                        String ruleId = rawText(finding, "rule_id").toLowerCase(Locale.ROOT);
+                        if (ruleId.contains("weak") || ruleId.contains("whitelist")
+                                || ruleId.contains("contains")) {
+                            result.add(finding);
+                        }
+                    }
+                } else {
+                    result.addAll(direct);
+                }
+            }
+        }
+        return result;
     }
 
     private Map<String, Object> best(List<Map<String, Object>> findings) {

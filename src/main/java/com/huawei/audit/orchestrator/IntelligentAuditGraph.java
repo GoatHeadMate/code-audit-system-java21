@@ -123,7 +123,8 @@ public class IntelligentAuditGraph {
                 context.sourceRoot(),
                 context.techProfile(),
                 state.candidates(),
-                state.evidenceManifest()
+                state.evidenceManifest(),
+                state.analysisSummary()
         );
         return Map.of(
                 "delegated_hunters", result.selectedHunters(),

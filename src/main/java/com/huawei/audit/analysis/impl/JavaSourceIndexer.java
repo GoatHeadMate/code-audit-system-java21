@@ -64,6 +64,10 @@ final class JavaSourceIndexer {
                     methodSequence
             );
         }
+        List<Sink> taintSinks = new MethodTaintAnalyzer().findTaintSinks(
+                methods, sinks
+        );
+        sinks.addAll(taintSinks);
         return SourceIndex.create(methods, sinks, implementations, parseErrors);
     }
 

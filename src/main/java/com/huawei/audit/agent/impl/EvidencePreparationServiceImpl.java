@@ -56,82 +56,38 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         Files.createDirectories(packageDirectory);
 
         var analysis = runWhiteBoxAnalysis(job, sourceRoot);
-        writeJson(
-                analysisDirectory.resolve("entrypoints.json"),
-                analysis.entryPoints()
-        );
-        writeJson(
-                analysisDirectory.resolve("sinks.json"),
-                analysis.sinks()
-        );
-        writeJson(
-                analysisDirectory.resolve("storage-accesses.json"),
-                analysis.storageAccesses()
-        );
+        writeJson(analysisDirectory.resolve("entrypoints.json"), analysis.entryPoints());
+        writeJson(analysisDirectory.resolve("sinks.json"), analysis.sinks());
+        writeJson(analysisDirectory.resolve("storage-accesses.json"), analysis.storageAccesses());
         writeJson(
                 analysisDirectory.resolve("unresolved-calls.json"),
                 Map.of(
                         "total", analysis.unresolvedCalls().size(),
-                        "stored", Math.min(
-                                MAX_UNRESOLVED_CALLS_WRITTEN,
-                                analysis.unresolvedCalls().size()
-                        ),
-                        "truncated", analysis.unresolvedCalls().size()
-                                > MAX_UNRESOLVED_CALLS_WRITTEN,
+                        "stored", Math.min(MAX_UNRESOLVED_CALLS_WRITTEN, analysis.unresolvedCalls().size()),
+                        "truncated", analysis.unresolvedCalls().size() > MAX_UNRESOLVED_CALLS_WRITTEN,
                         "items", analysis.unresolvedCalls().stream()
-                                .limit(MAX_UNRESOLVED_CALLS_WRITTEN)
-                                .toList()
+                                .limit(MAX_UNRESOLVED_CALLS_WRITTEN).toList()
                 )
         );
-        writeJson(
-                analysisDirectory.resolve("parser-diagnostics.json"),
-                analysis.parserDiagnostics()
-        );
-        writeJson(
-                analysisDirectory.resolve("coverage.json"),
-                analysis.coverage()
-        );
+        writeJson(analysisDirectory.resolve("parser-diagnostics.json"), analysis.parserDiagnostics());
+        writeJson(analysisDirectory.resolve("coverage.json"), analysis.coverage());
         List<String> allCandidateChunks = writeChunks(
-                analysisDirectory,
-                "candidate-paths",
-                analysis.candidatePaths()
-        );
+                analysisDirectory, "candidate-paths", analysis.candidatePaths());
         List<String> allStoredCandidateChunks = writeChunks(
-                analysisDirectory,
-                "stored-candidates",
-                analysis.storedCandidates()
-        );
+                analysisDirectory, "stored-candidates", analysis.storedCandidates());
 
         Path indexFile = analysisDirectory.resolve("index.json");
         Map<String, Object> index = new LinkedHashMap<>();
         index.put("mode", "candidate-path-whitebox");
-        index.put(
-                "source_root",
-                sourceRoot.toAbsolutePath().normalize().toString()
-        );
-        index.put(
-                "entrypoints",
-                absolute(analysisDirectory.resolve("entrypoints.json"))
-        );
+        index.put("source_root", sourceRoot.toAbsolutePath().normalize().toString());
+        index.put("entrypoints", absolute(analysisDirectory.resolve("entrypoints.json")));
         index.put("sinks", absolute(analysisDirectory.resolve("sinks.json")));
-        index.put(
-                "storage_accesses",
-                absolute(analysisDirectory.resolve("storage-accesses.json"))
-        );
+        index.put("storage_accesses", absolute(analysisDirectory.resolve("storage-accesses.json")));
         index.put("candidate_path_chunks", allCandidateChunks);
         index.put("stored_candidate_chunks", allStoredCandidateChunks);
-        index.put(
-                "unresolved_calls",
-                absolute(analysisDirectory.resolve("unresolved-calls.json"))
-        );
-        index.put(
-                "coverage",
-                absolute(analysisDirectory.resolve("coverage.json"))
-        );
-        index.put(
-                "parser_diagnostics",
-                absolute(analysisDirectory.resolve("parser-diagnostics.json"))
-        );
+        index.put("unresolved_calls", absolute(analysisDirectory.resolve("unresolved-calls.json")));
+        index.put("coverage", absolute(analysisDirectory.resolve("coverage.json")));
+        index.put("parser_diagnostics", absolute(analysisDirectory.resolve("parser-diagnostics.json")));
         index.put("summary", analysis.coverage());
         index.put("codeql_used", false);
         writeJson(indexFile, index);
@@ -163,15 +119,9 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             Map<String, Object> task = new LinkedHashMap<>();
             task.put("mode", "candidate-path-whitebox");
             task.put("hunter", hunter);
-            task.put(
-                    "source_root",
-                    sourceRoot.toAbsolutePath().normalize().toString()
-            );
+            task.put("source_root", sourceRoot.toAbsolutePath().normalize().toString());
             task.put("analysis_index", absolute(indexFile));
-            task.put(
-                    "candidate_sink_categories",
-                    EvidencePackagePolicy.sinkCategories(hunter)
-            );
+            task.put("candidate_sink_categories", EvidencePackagePolicy.sinkCategories(hunter));
             task.put("candidate_count", relevant.size());
             task.put("candidate_chunks", candidateChunks);
             task.put("stored_candidate_count", relevantStored.size());

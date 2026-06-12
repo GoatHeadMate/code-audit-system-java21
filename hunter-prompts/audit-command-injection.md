@@ -17,6 +17,11 @@
 **④ 模板替换后执行**
 - `String.replace("${...}", value)` 后传入 exec，且 value 来自外部输入 → **HIGH**，confidence ≈ 0.75
 
+**④-b 配置模板拼接后执行**
+- YAML/properties 中定义命令模板（含 `${...}`），Java 代码用 String.replace 替换后执行 → **HIGH**，confidence ≈ 0.80
+- 重点检查：TaskUtil.generateQuery() 等通用模板替换工具方法
+- 需追踪模板值来源（配置文件）和替换参数来源（HTTP 输入）
+
 **⑤ 反序列化 gadget 链中的 exec**
 - 反序列化 gadget 类中的 exec → **MEDIUM**，confidence ≈ 0.65
 
@@ -30,4 +35,4 @@
 - 检查中间环节是否存在有效净化（白名单校验、参数化执行）
 - 确认调用链中的方法分派是否可达（接口实现、条件分支）
 
-`rule_id` 命名：`cmdinj-exec-string`、`cmdinj-exec-args`、`cmdinj-procbuilder`、`cmdinj-bash-concat`、`cmdinj-template-replace`。
+`rule_id` 命名：`cmdinj-exec-string`、`cmdinj-exec-args`、`cmdinj-procbuilder`、`cmdinj-bash-concat`、`cmdinj-template-replace`、`cmdinj-config-template`。

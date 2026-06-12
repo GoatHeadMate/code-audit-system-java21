@@ -20,6 +20,9 @@ final class DangerousSinkClassifier {
                 || "ProcessBuilder".equals(receiverType))) {
             return match("COMMAND_EXECUTION", expression);
         }
+        if (isReplaceCommandExecution(method, lowerExpression)) {
+            return match("COMMAND_EXECUTION", expression);
+        }
         if (isExpressionExecution(method, lowerExpression, lowerType)) {
             return match("SCRIPT_OR_EXPRESSION_EXECUTION", expression);
         }
@@ -230,6 +233,14 @@ final class DangerousSinkClassifier {
                         expression + " " + receiverType,
                         "method", "constructor", "class"
                 );
+    }
+
+    private boolean isReplaceCommandExecution(String method, String lowerExpression) {
+        if (!Set.of("replace", "replaceAll").contains(method)) {
+            return false;
+        }
+        return containsAny(lowerExpression, "bash", "sh ", "cmd", "exec",
+                "processbuilder", "/bin/", "powershell", "python", "script", "shell");
     }
 
     private boolean containsAny(String value, String... needles) {

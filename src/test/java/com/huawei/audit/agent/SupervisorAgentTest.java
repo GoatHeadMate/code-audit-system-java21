@@ -68,6 +68,7 @@ class SupervisorAgentTest {
                         "ssrf",
                         "xxe"
                 ),
+                Map.of(),
                 Map.of()
         );
 
@@ -135,6 +136,7 @@ class SupervisorAgentTest {
                         "command_injection",
                         "authorization"
                 ),
+                Map.of(),
                 Map.of()
         );
 

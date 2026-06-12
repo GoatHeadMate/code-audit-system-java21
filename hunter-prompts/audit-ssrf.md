@@ -24,5 +24,7 @@
 - 检查 HttpClient/RestTemplate 是否配置了自动跟随重定向
 - 用 Grep 搜索目标 URL 的验证逻辑（白名单、域名校验、IP 黑名单）
 - `String.contains()` 白名单可被 `http://evil.com#whitelisted.com` 绕过
+- **代理凭据注入**：检查 HTTP 转发/代理工具类（BackendRestClient、RestTemplate wrapper）是否在转发请求时自动添加认证头（x-user-name、Authorization、Cookie 等）。如果是，SSRF 的影响从"可发送请求"升级为"可以管理员身份发送请求"，在 finding 的 message 中标注。
+- **具体绕过手法**：对 contains()/startsWith() 白名单，需给出至少一种具体绕过 payload，如 `http://internal:8080/malicious?x=/whitelisted/path` 或 `http://whitelisted.com@evil.com`
 
 `rule_id` 命名：`ssrf-taint`、`ssrf-no-filter`、`ssrf-weak-contains`、`ssrf-redirect`、`ssrf-proxy`。

@@ -34,7 +34,7 @@ class IntelligentAuditGraphTest {
                         Map.of("candidate_paths", 2)
                 )
         );
-        when(supervisor.run(any(), any(), any(), any(), any())).thenReturn(
+        when(supervisor.run(any(), any(), any(), any(), any(), any())).thenReturn(
                 new SupervisorAgent.SupervisorResult(
                         List.of("sql_injection", "ssrf"),
                         "delegated two native subagents",

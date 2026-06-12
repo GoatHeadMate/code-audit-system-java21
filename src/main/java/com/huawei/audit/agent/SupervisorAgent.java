@@ -60,7 +60,8 @@ public class SupervisorAgent {
             Path sourceRoot,
             Map<String, Object> techProfile,
             List<String> candidates,
-            Map<String, String> evidenceManifest
+            Map<String, String> evidenceManifest,
+            Map<String, Object> analysisSummary
     ) throws Exception {
         logs.publish(
                 job,
@@ -75,7 +76,8 @@ public class SupervisorAgent {
                                 sourceRoot,
                                 techProfile,
                                 candidates,
-                                evidenceManifest
+                                evidenceManifest,
+                                analysisSummary
                         ))
                 ),
                 line -> logs.publish(job, line)
@@ -84,18 +86,34 @@ public class SupervisorAgent {
                 job.workDir().resolve("supervisor-response.txt"),
                 response
         );
-        SupervisorEnvelope envelope = parseEnvelope(response, candidates);
-        logs.publish(
-                job,
-                "[supervisor-agent] completed; delegated="
-                        + String.join(", ", envelope.selectedHunters())
-                        + ", findings=" + envelope.findings().size()
-        );
-        return new SupervisorResult(
-                envelope.selectedHunters(),
-                envelope.rationale(),
-                envelope.findings()
-        );
+        try {
+            SupervisorEnvelope envelope = parseEnvelope(response, candidates);
+            logs.publish(
+                    job,
+                    "[supervisor-agent] completed; delegated="
+                            + String.join(", ", envelope.selectedHunters())
+                            + ", findings=" + envelope.findings().size()
+            );
+            return new SupervisorResult(
+                    envelope.selectedHunters(),
+                    envelope.rationale(),
+                    envelope.findings()
+            );
+        } catch (Exception parseException) {
+            String preview = response == null ? "null"
+                    : response.strip().substring(0, Math.min(200, response.strip().length()));
+            logs.publish(
+                    job,
+                    "[supervisor-agent] failed to parse supervisor response: "
+                            + parseException.getMessage()
+                            + " | response preview: " + preview
+            );
+            return new SupervisorResult(
+                    candidates,
+                    "supervisor response unparseable: " + parseException.getMessage(),
+                    List.of()
+            );
+        }
     }
 
     private String systemPrompt() {
@@ -150,6 +168,25 @@ public class SupervisorAgent {
                     limitations, not confirmed vulnerabilities.
                 11. Return format:
                    {"selected_hunters":["..."],"rationale":"...","findings":[...]}
+                12. After gathering all subagent findings, perform a CROSS-API CHAIN
+                   COMPOSITION analysis before returning. Specifically:
+                   a. If both SSRF and COMMAND_INJECTION/DESERIALIZATION findings exist,
+                      check whether the SSRF target URL could reach the command injection
+                      endpoint's internal path. Report the combined chain as a separate
+                      CRITICAL finding with vuln_type "ATTACK_CHAIN".
+                   b. Inspect proxy/forwarding utilities (BackendRestClient, RestTemplate,
+                      HttpClient wrappers) for automatic credential injection — if the
+                      proxy auto-adds authentication headers (x-user-name, Authorization,
+                      x-user-id, etc.), note this in the chain finding as it upgrades
+                      SSRF from "can make requests" to "can make authenticated admin
+                      requests to internal APIs".
+                   c. For weak whitelist (contains/startsWith) findings, reason about
+                      concrete bypass techniques: query parameter embedding
+                      (?x=whitelisted_path), path traversal, fragment injection,
+                      subdomain tricks. Include the bypass technique in the finding.
+                   d. If an endpoint missing authentication can reach another endpoint
+                      that has command execution, combine them into a single chain
+                      finding showing the full unauthenticated-to-RCE path.
                 """;
     }
 
@@ -157,7 +194,8 @@ public class SupervisorAgent {
             Path sourceRoot,
             Map<String, Object> techProfile,
             List<String> candidates,
-            Map<String, String> evidenceManifest
+            Map<String, String> evidenceManifest,
+            Map<String, Object> analysisSummary
     ) throws Exception {
         int maxHunters = properties.enabled()
                 ? Math.min(
@@ -182,6 +220,12 @@ public class SupervisorAgent {
                 Maximum delegated Hunters: %d
                 Intelligent selection enabled: %s
 
+                White-box analysis summary (for cross-API chain reasoning):
+                %s
+                Use this summary to identify potential cross-API chains. For example,
+                if both OUTBOUND_HTTP sinks (SSRF) and COMMAND_EXECUTION sinks exist,
+                check whether SSRF can reach the command execution endpoints internally.
+
                 Select the specialists appropriate for this project. When intelligent
                 selection is disabled, delegate all available Hunters. Each evidence file is
                 a bounded white-box review package containing precomputed entrypoint-to-sink
@@ -194,7 +238,9 @@ public class SupervisorAgent {
                 objectMapper.writeValueAsString(candidates),
                 objectMapper.writeValueAsString(evidenceManifest),
                 maxHunters,
-                properties.enabled()
+                properties.enabled(),
+                objectMapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(analysisSummary)
         );
     }
 

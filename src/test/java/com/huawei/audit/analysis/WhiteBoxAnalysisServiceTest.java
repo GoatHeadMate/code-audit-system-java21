@@ -406,4 +406,38 @@ class WhiteBoxAnalysisServiceTest {
                             .isEqualTo("ACTUATOR_ENDPOINT");
                 });
     }
+
+    @Test
+    void detectsTaintPropagationThroughStringFormatToProcessBuilder()
+            throws Exception {
+        Files.writeString(tempDir.resolve("TaskController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class TaskController {
+                    private TaskExecutor executor;
+
+                    @PostMapping("/task")
+                    void execute(@RequestBody String input) {
+                        executor.run(input);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("TaskExecutor.java"), """
+                class TaskExecutor {
+                    void run(String userInput) {
+                        String cmd = String.format("bash -c %s", userInput);
+                        new ProcessBuilder("/bin/bash", "-c", cmd).start();
+                    }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir);
+
+        assertThat(result.candidatePaths())
+                .filteredOn(c -> c.sink().category().equals("COMMAND_EXECUTION"))
+                .isNotEmpty();
+    }
 }
