@@ -77,6 +77,28 @@ class DangerousSinkClassifierTest {
     }
 
     @Test
+    void recognizesCommandExecutionWrappers() {
+        assertCategory(
+                "exec",
+                "Runtime.getRuntime().exec(cmd)",
+                "Runtime",
+                "COMMAND_EXECUTION"
+        );
+        assertCategory(
+                "executeAndGetReturnMsg",
+                "RuntimeExec.executeAndGetReturnMsg(commands)",
+                "RuntimeExec",
+                "COMMAND_EXECUTION"
+        );
+        assertCategory(
+                "exec",
+                "RuntimeExec.exec(command)",
+                "RuntimeExec",
+                "COMMAND_EXECUTION"
+        );
+    }
+
+    @Test
     void recognizesWebAndDataSinkApis() {
         assertCategory(
                 "executeQuery",

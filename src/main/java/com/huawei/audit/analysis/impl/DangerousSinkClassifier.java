@@ -23,7 +23,7 @@ final class DangerousSinkClassifier {
         String lowerExpression = expression.toLowerCase(Locale.ROOT);
         String lowerType = receiverType.toLowerCase(Locale.ROOT);
 
-        if ("exec".equals(method) && expression.contains("Runtime")) {
+        if (method.startsWith("exec") && expression.contains("Runtime")) {
             return match("COMMAND_EXECUTION", expression);
         }
         if ("start".equals(method)
