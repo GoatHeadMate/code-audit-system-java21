@@ -570,6 +570,82 @@ class WhiteBoxAnalysisServiceTest {
     }
 
     @Test
+    void buildsCandidatePathThroughDoubleDelegateChainToRuntimeExecSink()
+            throws Exception {
+        Files.writeString(tempDir.resolve("HealthService.java"), """
+                import javax.ws.rs.*;
+
+                @Path("/check")
+                class HealthService {
+                    private HealthDelegate delegate;
+
+                    @GET @Path("/data")
+                    String checkData(String checkName) {
+                        return delegate.checkData(checkName);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("HealthDelegate.java"), """
+                interface HealthDelegate {
+                    String checkData(String checkName);
+                }
+                """);
+        Files.writeString(tempDir.resolve("HealthDelegateImpl.java"), """
+                class HealthDelegateImpl implements HealthDelegate {
+                    private TaskChecker taskChecker;
+
+                    public String checkData(String checkName) {
+                        return taskChecker.check(checkName);
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("TaskChecker.java"), """
+                interface TaskChecker {
+                    String check(String name);
+                }
+                """);
+        Files.writeString(tempDir.resolve("TaskCheckerImpl.java"), """
+                class TaskCheckerImpl implements TaskChecker {
+                    public String check(String name) {
+                        return doCheck(name);
+                    }
+
+                    private String doCheck(String name) {
+                        return RuntimeExec.executeAndGetReturnMsg(
+                                ("/bin/bash /opt/script.sh " + name).split(" "));
+                    }
+                }
+                """);
+        Files.writeString(tempDir.resolve("RuntimeExec.java"), """
+                class RuntimeExec {
+                    static String executeAndGetReturnMsg(String[] commands) {
+                        try {
+                            Process p = Runtime.getRuntime().exec(commands);
+                            return new String(p.getInputStream().readAllBytes());
+                        } catch (Exception e) { return ""; }
+                    }
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir, List.of(), null, "claude");
+
+        assertThat(result.candidatePaths())
+                .as("double delegate chain should reach RuntimeExec sink")
+                .filteredOn(c -> c.sink().category().equals("COMMAND_EXECUTION"))
+                .isNotEmpty()
+                .anySatisfy(candidate -> {
+                    assertThat(candidate.entryPoint().path())
+                            .isEqualTo("/check/data");
+                    assertThat(candidate.methodPath())
+                            .extracting(step -> step.className())
+                            .contains("HealthService", "HealthDelegateImpl",
+                                    "TaskCheckerImpl");
+                });
+    }
+
+    @Test
     void detectsArgumentInjectionThroughSplitAndWrapperExec() throws Exception {
         Files.writeString(tempDir.resolve("TaskCheckService.java"), """
                 package com.example;

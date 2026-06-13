@@ -19,7 +19,8 @@ import java.util.stream.Collectors;
 
 final class CandidatePathFinder {
     private static final int MAX_PATH_DEPTH = 20;
-    private static final int MAX_CANDIDATES = 1_000;
+    private static final int MAX_CANDIDATES = 3_000;
+    private static final int MAX_PER_ENTRY_POINT = 200;
 
     List<CandidatePath> find(
             List<EntryPoint> entryPoints,
@@ -46,6 +47,7 @@ final class CandidatePathFinder {
                     || !sinkDistances.containsKey(entryPoint.methodId())) {
                 continue;
             }
+            int entryStart = candidates.size();
             Deque<PathState> queue = new ArrayDeque<>();
             queue.add(new PathState(
                     entryPoint.methodId(),
@@ -53,7 +55,9 @@ final class CandidatePathFinder {
                     List.of(),
                     Set.of(entryPoint.methodId())
             ));
-            while (!queue.isEmpty() && candidates.size() < MAX_CANDIDATES) {
+            while (!queue.isEmpty()
+                    && candidates.size() < MAX_CANDIDATES
+                    && (candidates.size() - entryStart) < MAX_PER_ENTRY_POINT) {
                 PathState state = queue.removeFirst();
                 for (Sink sink : sinksByMethod.getOrDefault(
                         state.methodId(),
