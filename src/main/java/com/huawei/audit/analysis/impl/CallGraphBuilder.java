@@ -22,7 +22,13 @@ final class CallGraphBuilder {
             "scheduleAtFixedRate",
             "scheduleWithFixedDelay",
             "submit",
-            "supplyAsync"
+            "supplyAsync",
+            "register",
+            "registerTask",
+            "addTask",
+            "enqueue",
+            "offer",
+            "post"
     );
     private static final Set<String> FUNCTIONAL_DISPATCH_METHODS = Set.of(
             "accept",
@@ -151,6 +157,36 @@ final class CallGraphBuilder {
             );
         }
 
+        if (targets.isEmpty()
+                && !call.receiver().isBlank()
+                && !"this".equals(call.receiver())
+                && !"super".equals(call.receiver())
+                && !call.receiver().contains("(")
+                && Character.isLowerCase(call.receiver().charAt(0))) {
+            String inferredType = Character.toUpperCase(
+                    call.receiver().charAt(0))
+                    + call.receiver().substring(1);
+            addClassTargets(
+                    targets,
+                    index,
+                    inferredType,
+                    call,
+                    "field-name-type"
+            );
+            for (String impl : implementations.getOrDefault(
+                    inferredType,
+                    Set.of()
+            )) {
+                addClassTargets(
+                        targets,
+                        index,
+                        impl,
+                        call,
+                        "field-name-type"
+                );
+            }
+        }
+
         List<MethodNode> byName = index.methodsByName()
                 .getOrDefault(call.methodName(), List.of())
                 .stream()
@@ -193,6 +229,37 @@ final class CallGraphBuilder {
                         "call",
                         "deferred-callback"
                 );
+            }
+        }
+        if (targets.isEmpty()) {
+            for (String argumentType : call.argumentTypes()) {
+                if (argumentType == null || argumentType.isBlank()) {
+                    continue;
+                }
+                String simpleName = AnalysisTextUtils.simpleName(
+                        argumentType);
+                if (!index.methodsByClassAndName()
+                        .getOrDefault(simpleName + "#run", List.of())
+                        .isEmpty()) {
+                    addCallbackMethod(
+                            targets,
+                            index,
+                            argumentType,
+                            "run",
+                            "runnable-arg-callback"
+                    );
+                }
+                if (!index.methodsByClassAndName()
+                        .getOrDefault(simpleName + "#call", List.of())
+                        .isEmpty()) {
+                    addCallbackMethod(
+                            targets,
+                            index,
+                            argumentType,
+                            "call",
+                            "runnable-arg-callback"
+                    );
+                }
             }
         }
         if (isFunctionalDispatch(call)) {

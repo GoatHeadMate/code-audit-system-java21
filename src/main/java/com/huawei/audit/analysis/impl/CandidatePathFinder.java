@@ -144,7 +144,10 @@ final class CandidatePathFinder {
                 "receiver-type",
                 "same-class",
                 "interface-implementation",
-                "static-class-name"
+                "static-class-name",
+                "field-name-type",
+                "deferred-callback",
+                "runnable-arg-callback"
         ).contains(edge.resolution()))) {
             return "HIGH";
         }
