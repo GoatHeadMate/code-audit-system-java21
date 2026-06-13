@@ -19,7 +19,6 @@ import java.util.stream.Collectors;
 
 final class CandidatePathFinder {
     private static final int MAX_PATH_DEPTH = 20;
-    private static final int MAX_CANDIDATES = 3_000;
     private static final int MAX_PER_ENTRY_POINT = 200;
 
     List<CandidatePath> find(
@@ -56,7 +55,6 @@ final class CandidatePathFinder {
                     Set.of(entryPoint.methodId())
             ));
             while (!queue.isEmpty()
-                    && candidates.size() < MAX_CANDIDATES
                     && (candidates.size() - entryStart) < MAX_PER_ENTRY_POINT) {
                 PathState state = queue.removeFirst();
                 for (Sink sink : sinksByMethod.getOrDefault(
