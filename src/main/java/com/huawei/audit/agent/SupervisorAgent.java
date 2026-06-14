@@ -155,7 +155,7 @@ public class SupervisorAgent {
                    Reject findings that name a sink but do not validate the candidate
                    entrypoint, dispatch path and attacker-controlled value flow.
                 9. Each finding MUST include these fields:
-                   rule_id, title, severity (HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
+                   rule_id, title, severity (CRITICAL/HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
                    vuln_type (e.g. SQL_INJECTION, SSRF, XSS), file_path, start_line,
                    message, evidence, data_flow_path (array of strings), http_method,
                    http_path, entrypoint, reachability and discovery_source.
