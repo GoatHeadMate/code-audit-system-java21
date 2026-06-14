@@ -59,6 +59,7 @@ public class SupervisorAgent {
             Map<String, Object> techProfile,
             List<String> candidates,
             Map<String, String> evidenceManifest,
+            Map<String, String> instructionManifest,
             Map<String, Object> analysisSummary
     ) throws Exception {
         logs.publish(
@@ -75,6 +76,7 @@ public class SupervisorAgent {
                                 techProfile,
                                 candidates,
                                 evidenceManifest,
+                                instructionManifest,
                                 analysisSummary
                         ))
                 ),
@@ -127,7 +129,31 @@ public class SupervisorAgent {
                 Violation = fatal parse error = entire audit fails.
                 ════════════════════════════════════════════════════════════════
 
-                You have native Claude Code Agent subagents named `audit-<hunter>`.
+                ════════════════════════════════════════════════════════════════
+                AGENT DELEGATION — CRITICAL INSTRUCTIONS
+                ════════════════════════════════════════════════════════════════
+                You delegate work using the Agent tool. Each delegation MUST use
+                ONLY these two parameters:
+                  - "description": short label (e.g. "code_execution batch 1 audit")
+                  - "prompt": full instructions for the subagent
+
+                ██ NEVER use the "subagent_type" parameter. It does NOT work. ██
+                ██ NEVER use the "name" parameter.                             ██
+
+                The prompt you give each subagent must contain:
+                1. The path to the INSTRUCTION file (category rules + knowledge)
+                2. The path to the TASK file (candidate paths to review)
+                3. The source root path
+                4. A directive: "Read the instruction file FIRST, then read the
+                   task file, then review every chunk listed in the task file."
+
+                Example Agent call:
+                Agent(
+                  description: "code_execution batch 1 audit",
+                  prompt: "You are a white-box audit subagent. Read the instruction file at D:/workspace/instructions/audit-code-execution.md for your rules and category knowledge. Then read your task file at D:/workspace/evidence/packages/code_execution/task-batch-1.json. Source root: D:/project. Review EVERY candidate-path chunk and stored-candidate chunk. Return a single JSON object: {\"chunks_reviewed\": N, \"findings\": [...]}. No markdown, no explanatory text."
+                )
+                ════════════════════════════════════════════════════════════════
+
                 Java has already built white-box candidate paths from external entrypoints
                 through source call edges to dangerous sinks, including two-stage stored
                 candidates that join an HTTP write path to an asynchronous execution path.
@@ -135,7 +161,7 @@ public class SupervisorAgent {
                 aggregate confirmed findings. Do not repeat broad source discovery yourself.
 
                 Rules:
-                1. Delegate each selected category to its matching Agent subagent.
+                1. Delegate each selected category to its matching subagent.
                 2. Launch independent subagents in parallel in a single delegation wave
                    whenever possible.
                 3. Code execution, authorization, unsafe parsing, file operations, SSRF
@@ -146,12 +172,9 @@ public class SupervisorAgent {
                    contains a unique non-overlapping subset of candidates. Delegate all
                    batch agents for the same category in a single parallel wave.
                 4. Delegate no more than the configured maximum and never invent names.
-                5. Give each subagent its exact task file path and source root path.
-                   In the prompt to each subagent, include the literal string:
-                   "Read the task file at <absolute path> first."
-                   Require it to review EVERY candidate-path chunk and EVERY
-                   stored-candidate chunk listed in that task.
-                6. Subagents must use only Read/Glob/Grep. Never request Bash or CodeQL.
+                5. Give each subagent its exact instruction file path, task file path,
+                   and source root path in the prompt.
+                6. Subagents use Read/Glob/Grep. Never request Bash or CodeQL.
                 7. If a subagent returns an agentId and says "use SendMessage to continue",
                    you MUST use SendMessage with that agentId to resume it. Never create
                    a new Agent for the same hunter — always continue the existing one.
@@ -197,6 +220,7 @@ public class SupervisorAgent {
             Map<String, Object> techProfile,
             List<String> candidates,
             Map<String, String> evidenceManifest,
+            Map<String, String> instructionManifest,
             Map<String, Object> analysisSummary
     ) throws Exception {
         boolean hasBatches = candidates.stream().anyMatch(c -> c.contains("_batch_"));
@@ -223,10 +247,13 @@ public class SupervisorAgent {
                 Technology profile:
                 %s
 
-                Available Hunter subagents:
+                Available Hunter categories:
                 %s
 
-                Evidence file manifest:
+                Task file manifest (hunter → task file path):
+                %s
+
+                Instruction file manifest (base category → instruction file path):
                 %s
 
                 Maximum delegated Hunters: %d
@@ -234,9 +261,17 @@ public class SupervisorAgent {
                 %s
                 White-box analysis summary (for cross-API chain reasoning):
                 %s
-                Use this summary to identify potential cross-API chains. For example,
-                if both OUTBOUND_HTTP sinks (SSRF) and COMMAND_EXECUTION sinks exist,
-                check whether SSRF can reach the command execution endpoints internally.
+
+                DELEGATION INSTRUCTIONS:
+                For each hunter in the task file manifest, delegate an Agent with:
+                - description: "<hunter_name> audit"
+                - prompt: Include: (1) instruction file path from the instruction manifest
+                  (use the base category, e.g. for "code_execution_batch_1" use "code_execution"),
+                  (2) task file path from the task manifest, (3) source root path above.
+                  Tell the subagent to read instruction file first, then task file, then
+                  review all chunks.
+
+                REMEMBER: Do NOT use subagent_type parameter. Only use description + prompt.
 
                 Select the specialists appropriate for this project. When intelligent
                 selection is disabled, delegate all available Hunters. Each evidence file is
@@ -249,6 +284,7 @@ public class SupervisorAgent {
                 objectMapper.writeValueAsString(techProfile),
                 objectMapper.writeValueAsString(candidates),
                 objectMapper.writeValueAsString(evidenceManifest),
+                objectMapper.writeValueAsString(instructionManifest),
                 maxHunters,
                 properties.enabled(),
                 batchNote,

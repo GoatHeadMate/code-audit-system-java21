@@ -6,6 +6,10 @@ import java.util.List;
 import java.util.Map;
 
 public interface SubagentDefinitionService {
-    void materialize(Path workDirectory, List<String> hunters, Map<String, String> manifest)
+    /**
+     * Creates instruction files for each hunter and returns a map of
+     * base-category to absolute instruction file path.
+     */
+    Map<String, String> materialize(Path workDirectory, List<String> hunters, Map<String, String> taskManifest)
             throws IOException;
 }

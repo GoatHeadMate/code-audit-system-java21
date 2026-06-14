@@ -35,7 +35,11 @@ class IntelligentAuditGraphTest {
                         List.of("sql_injection", "ssrf")
                 )
         );
-        when(supervisor.run(any(), any(), any(), any(), any(), any())).thenReturn(
+        when(definitions.materialize(any(), any(), any())).thenReturn(
+                Map.of("sql_injection", "/instructions/audit-sql-injection.md",
+                       "ssrf", "/instructions/audit-ssrf.md")
+        );
+        when(supervisor.run(any(), any(), any(), any(), any(), any(), any())).thenReturn(
                 new SupervisorAgent.SupervisorResult(
                         List.of("sql_injection", "ssrf"),
                         "delegated two native subagents",

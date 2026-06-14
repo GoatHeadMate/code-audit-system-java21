@@ -92,10 +92,13 @@ class ClaudeCodeSupervisorModelTest {
         assertThat(logs)
                 .contains(
                         "[subagent-start] START audit-command-injection: "
-                                + "Review command execution paths",
-                        "[subagent-return] DONE audit-command-injection"
-                                + " | progress 1/1 | result 17 B"
+                                + "Review command execution paths"
                 );
+        assertThat(logs)
+                .anyMatch(log -> log.contains("[subagent-return] DONE audit-command-injection")
+                        && log.contains("progress 1/1")
+                        && log.contains("result 17 B")
+                        && log.contains("preview: confirmed finding"));
         assertThat(logs)
                 .noneMatch(log -> log.contains("unknown-hunter")
                         || log.contains("internal-read-1"));

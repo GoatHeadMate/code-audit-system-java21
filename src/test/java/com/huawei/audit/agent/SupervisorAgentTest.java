@@ -70,6 +70,7 @@ class SupervisorAgentTest {
                         "unsafe_parsing"
                 ),
                 Map.of(),
+                Map.of(),
                 Map.of()
         );
 
@@ -138,6 +139,7 @@ class SupervisorAgentTest {
                         "code_execution",
                         "authorization"
                 ),
+                Map.of(),
                 Map.of(),
                 Map.of()
         );

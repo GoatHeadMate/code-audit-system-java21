@@ -168,14 +168,15 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
                     }
                     int completed = context.returnedAgents().incrementAndGet();
                     int delegated = completed + context.delegatedAgents().size();
-                    String status = block.path("is_error").asBoolean(false)
-                            ? "FAILED"
-                            : "DONE";
+                    boolean isError = block.path("is_error").asBoolean(false);
+                    String status = isError ? "FAILED" : "DONE";
+                    String contentPreview = resultPreview(block.path("content"));
                     context.eventConsumer().accept(
                             "[subagent-return] " + status + " " + agent
                                     + " | progress " + completed + "/"
                                     + Math.max(completed, delegated)
                                     + " | result " + resultSize(block.path("content"))
+                                    + " | preview: " + contentPreview
                     );
                 }
                 return;
@@ -229,6 +230,19 @@ public class ClaudeCodeSupervisorModel implements ChatModel {
             return length + " B";
         }
         return String.format(java.util.Locale.ROOT, "%.1f KB", length / 1_024.0);
+    }
+
+    private String resultPreview(JsonNode content) {
+        String raw;
+        if (content.isTextual()) {
+            raw = content.asText("");
+        } else if (content.isArray() && content.size() > 0) {
+            JsonNode first = content.get(0);
+            raw = first.path("text").asText(first.toString());
+        } else {
+            raw = content.toString();
+        }
+        return raw.length() > 200 ? raw.substring(0, 200) + "…" : raw;
     }
 
     private record SessionContext(
