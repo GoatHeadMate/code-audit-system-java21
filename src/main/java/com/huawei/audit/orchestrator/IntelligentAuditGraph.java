@@ -111,7 +111,8 @@ public class IntelligentAuditGraph {
         );
         subagentDefinitions.materialize(
                 context.job().workDir(),
-                preparation.expandedCandidates()
+                preparation.expandedCandidates(),
+                preparation.manifest()
         );
         return Map.of(
                 "candidates", preparation.expandedCandidates(),

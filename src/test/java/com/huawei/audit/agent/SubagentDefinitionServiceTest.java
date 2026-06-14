@@ -18,7 +18,8 @@ class SubagentDefinitionServiceTest {
     void materializesReadOnlyNativeClaudeSubagent() throws Exception {
         new SubagentDefinitionServiceImpl().materialize(
                 tempDir,
-                List.of("sql_injection")
+                List.of("sql_injection"),
+                java.util.Map.of("sql_injection", "/path/to/task.json")
         );
 
         Path definition = tempDir.resolve(
@@ -36,7 +37,8 @@ class SubagentDefinitionServiceTest {
                           - audit-sql-injection
                         """)
                 .contains("Do not delegate to another agent")
-                .contains("review every candidate-path");
+                .contains("EVERY candidate-path")
+                .contains("/path/to/task.json");
         assertThat(skill).isRegularFile();
         assertThat(Files.readString(skill))
                 .contains("name: audit-sql-injection")

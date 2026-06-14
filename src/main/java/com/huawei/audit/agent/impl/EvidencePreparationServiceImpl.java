@@ -27,6 +27,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private static final int ITEMS_PER_CHUNK = 50;
     private static final int MAX_CHUNK_BYTES = 64 * 1_024;
     private static final int MAX_UNRESOLVED_CALLS_WRITTEN = 5_000;
+    private static final int MAX_BATCHES_PER_HUNTER = 5;
     private static final List<String> REVIEW_CONTRACT = List.of(
             "Review every candidate path in this package.",
             "Review every stored candidate as a two-stage flow: HTTP write path, storage boundary, then execution path.",
@@ -168,7 +169,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<String> expandedCandidates, AuditJob job
     ) throws Exception {
         int totalChunks = candChunks.size() + storedChunks.size();
-        int batchCount = (totalChunks + maxChunks - 1) / maxChunks;
+        int batchCount = Math.min((totalChunks + maxChunks - 1) / maxChunks, MAX_BATCHES_PER_HUNTER);
         int candPerBatch = (candChunks.size() + batchCount - 1) / batchCount;
         int storedPerBatch = (storedChunks.size() + batchCount - 1) / batchCount;
         logs.publish(job, "[whitebox] splitting " + hunter + " into " + batchCount

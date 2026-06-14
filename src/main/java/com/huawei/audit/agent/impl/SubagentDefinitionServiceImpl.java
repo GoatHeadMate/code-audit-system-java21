@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
@@ -16,7 +17,7 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
             .normalize();
 
     @Override
-    public void materialize(Path workDirectory, List<String> hunters)
+    public void materialize(Path workDirectory, List<String> hunters, Map<String, String> manifest)
             throws IOException {
         Path agentsDirectory = workDirectory.resolve(".claude").resolve("agents");
         Path skillsDirectory = workDirectory.resolve(".claude").resolve("skills");
@@ -45,9 +46,10 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
             }
 
             String dashed = hunter.replace('_', '-');
+            String taskFilePath = manifest.getOrDefault(hunter, "");
             Files.writeString(
                     agentsDirectory.resolve("audit-" + dashed + ".md"),
-                    agentDefinition(dashed, skillName, baseHunter)
+                    agentDefinition(dashed, skillName, baseHunter, taskFilePath)
             );
         }
     }
@@ -58,9 +60,7 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
     }
 
     private String agentDefinition(
-            String dashed,
-            String skillName,
-            String hunter
+            String dashed, String skillName, String hunter, String taskFilePath
     ) {
         return """
                 ---
@@ -75,14 +75,17 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
 
                 You are the `%s` white-box audit subagent.
 
-                FIRST ACTION — before reading any task file or source code, invoke
-                your `%s` skill to load the category-specific judgment
-                rules (severity thresholds, sink patterns, downgrade conditions).
-                These rules are mandatory for every verdict you produce.
+                ════════════════════════════════════════════════════════════
+                YOUR TASK FILE (read this FIRST, before anything else):
+                %s
+                ════════════════════════════════════════════════════════════
+
+                FIRST ACTION: Read the task file above, then invoke your `%s`
+                skill to load category-specific judgment rules.
 
                 Mandatory execution contract:
-                - Start from the assigned task file and review every candidate-path
-                  and stored-candidate chunk listed in it.
+                - Read the task file, then open and review EVERY candidate-path
+                  chunk and stored-candidate chunk listed in it.
                 - Java has already discovered entrypoints, methods, call edges and
                   dangerous sinks. Do not repeat an unbounded repository-wide scan.
                 - For each candidate, validate the proposed entrypoint-to-sink path
@@ -92,47 +95,32 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                   including stored or asynchronous second-order flows.
                 - A stored candidate contains an HTTP write path and a later execution
                   path joined by a storage key. Confirm the exact entity field, database
-                  column, mapper property, Redis key or equivalent mapping. Matching only
-                  the same Repository is not sufficient for a finding.
-                - For expression engines such as MVEL, SpEL, OGNL, Groovy, Velocity and
-                  FreeMarker, inspect compile/bind/concatenation steps and the final
-                  execution API. Confirm whether the stored value controls executable
-                  syntax rather than only data variables.
+                  column, mapper property, Redis key or equivalent mapping.
                 - Use Glob/Grep/Read to resolve ambiguous dispatch, inherited handlers,
                   framework filters, sanitizers and missing source slices.
                 - Never execute CodeQL, shell commands, or create files.
                 - Do not delegate to another agent.
-                - Distinguish unauthenticated, authenticated and privileged reachability.
-                  A missing method-level check is not proof of unauthenticated access when
-                  a global filter may exist.
                 - Validate every reported path against source code and suppress false
                   positives.
-                - If the task has no candidates for this category, inspect only its
-                  unresolved entrypoints for obvious analyzer gaps, then return [].
                 - Return exactly one JSON object with two keys:
-                  "chunks_reviewed" (integer — how many candidate + stored-candidate
-                  chunk files you actually opened and read) and
-                  "findings" (array of finding objects).
+                  "chunks_reviewed" (integer) and "findings" (array of finding objects).
                   Each finding must contain rule_id, title, severity, confidence,
-                  file_path, start_line, message, evidence and vuln_type. Also include
-                  http_method, http_path, entrypoint, reachability, discovery_source
-                  and data_flow_path when applicable.
-                  Return {"chunks_reviewed": 0, "findings": []} when no issue is
-                  confirmed.
+                  file_path, start_line, message, evidence, vuln_type, http_method,
+                  http_path, entrypoint, reachability, discovery_source, data_flow_path.
+                  Return {"chunks_reviewed": 0, "findings": []} when no issue is confirmed.
                 - Do not use Markdown fences or explanatory text.
-                """                .formatted(
+                """.formatted(
                 dashed,
                 hunter.replace('_', ' '),
                 skillName,
                 hunter,
+                taskFilePath,
                 skillName
         );
     }
 
     private String skillDefinition(
-            String skillName,
-            String hunter,
-            String specialistKnowledge
+            String skillName, String hunter, String specialistKnowledge
     ) {
         return """
                 ---
