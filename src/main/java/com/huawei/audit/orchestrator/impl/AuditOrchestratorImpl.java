@@ -107,14 +107,29 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
                     "audit completed: " + result.finalFindings().size()
                             + " findings -> " + output
             );
+            persistMeta(job);
         } catch (Exception exception) {
             job.fail(exception.getMessage());
             logs.publish(job, "[FATAL] " + exception.getMessage());
+            persistMeta(job);
         } finally {
             if (acquired) {
                 jobSlots.release();
             }
             logs.finish(job);
+        }
+    }
+
+    private void persistMeta(AuditJob job) {
+        try {
+            if (job.workDir() != null) {
+                Files.writeString(
+                        job.workDir().resolve("job-meta.json"),
+                        objectMapper.writerWithDefaultPrettyPrinter()
+                                .writeValueAsString(job.toMeta())
+                );
+            }
+        } catch (Exception ignored) {
         }
     }
 }

@@ -2,6 +2,7 @@ package com.huawei.audit.domain;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayDeque;
@@ -29,9 +30,13 @@ public final class AuditJob {
     private volatile boolean logDone;
 
     public AuditJob(String jobId, String lang) {
+        this(jobId, lang, Instant.now());
+    }
+
+    public AuditJob(String jobId, String lang, Instant createdAt) {
         this.jobId = jobId;
         this.lang = lang;
-        this.createdAt = Instant.now();
+        this.createdAt = createdAt;
         this.updatedAt = createdAt;
     }
 
@@ -95,4 +100,18 @@ public final class AuditJob {
         this.taskSummary = Map.copyOf(taskSummary);
     }
     public void logDone(boolean logDone) { this.logDone = logDone; }
+
+    public Map<String, Object> toMeta() {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("job_id", jobId);
+        meta.put("lang", lang);
+        meta.put("status", status.value());
+        meta.put("source_type", sourceType);
+        meta.put("git_url", gitUrl);
+        meta.put("error", error);
+        meta.put("created_at", createdAt.toString());
+        meta.put("updated_at", updatedAt.toString());
+        meta.put("findings_count", findings.size());
+        return meta;
+    }
 }
