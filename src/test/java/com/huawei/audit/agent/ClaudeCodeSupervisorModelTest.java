@@ -76,7 +76,7 @@ class ClaudeCodeSupervisorModelTest {
 
         ClaudeCodeSupervisorModel model = new ClaudeCodeSupervisorModel(
                 executables,
-                new OrchestratorProperties(true, 10, 5),
+                new OrchestratorProperties(true, 10, 5, 80),
                 processes,
                 new ObjectMapper()
         );

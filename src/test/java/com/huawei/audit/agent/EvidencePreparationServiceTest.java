@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.audit.agent.impl.EvidencePreparationServiceImpl;
 import com.huawei.audit.analysis.impl.WhiteBoxAnalysisServiceImpl;
 import com.huawei.audit.config.AuditProperties;
+import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.source.AsyncEntryPointDiscoverer;
@@ -23,6 +24,8 @@ class EvidencePreparationServiceTest {
             Path.of("workspace"), "codeql", "claude", 2, 15,
             Duration.ofMinutes(30), Duration.ofMinutes(30), 4, 2048
     );
+    private static final OrchestratorProperties TEST_ORCH_PROPERTIES =
+            new OrchestratorProperties(true, 10, 5, 80);
 
     @TempDir
     Path tempDir;
@@ -49,6 +52,7 @@ class EvidencePreparationServiceTest {
                 new ObjectMapper(),
                 new JobLogBroker(),
                 TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
                 null,
                 null
         );
@@ -123,6 +127,7 @@ class EvidencePreparationServiceTest {
                 mapper,
                 new JobLogBroker(),
                 TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
                 null,
                 null
         );
@@ -174,6 +179,7 @@ class EvidencePreparationServiceTest {
                 mapper,
                 new JobLogBroker(),
                 TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
                 null,
                 null
         );

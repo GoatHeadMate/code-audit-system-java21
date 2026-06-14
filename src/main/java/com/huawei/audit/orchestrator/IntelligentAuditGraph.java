@@ -100,10 +100,6 @@ public class IntelligentAuditGraph {
                 context.job(),
                 "[langgraph4j] preparing HTTP interface inventory for native subagents"
         );
-        subagentDefinitions.materialize(
-                context.job().workDir(),
-                state.candidates()
-        );
         @SuppressWarnings("unchecked")
         List<Map<String, String>> dependencies = (List<Map<String, String>>)
                 context.techProfile().getOrDefault("dependencies", List.of());
@@ -113,7 +109,12 @@ public class IntelligentAuditGraph {
                 state.candidates(),
                 dependencies
         );
+        subagentDefinitions.materialize(
+                context.job().workDir(),
+                preparation.expandedCandidates()
+        );
         return Map.of(
+                "candidates", preparation.expandedCandidates(),
                 "evidence_manifest", preparation.manifest(),
                 "analysis_summary", preparation.analysisSummary()
         );

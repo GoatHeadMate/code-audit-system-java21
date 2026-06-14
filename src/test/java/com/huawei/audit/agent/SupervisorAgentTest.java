@@ -49,7 +49,8 @@ class SupervisorAgentTest {
                 new OrchestratorProperties(
                         true,
                         10,
-                        5
+                        5,
+                        80
                 ),
                 new JobLogBroker()
         );
@@ -119,7 +120,8 @@ class SupervisorAgentTest {
                 new OrchestratorProperties(
                         true,
                         10,
-                        5
+                        5,
+                        80
                 ),
                 new JobLogBroker()
         );

@@ -141,6 +141,10 @@ public class SupervisorAgent {
                 3. Code execution, authorization, unsafe parsing, file operations, SSRF
                    and component vulnerabilities are mandatory when available because they
                    can directly enable RCE or materially affect remote reachability.
+                   When a category is split into batch agents (e.g., code_execution_batch_1,
+                   code_execution_batch_2, ...), ALL batches are mandatory. Each batch
+                   contains a unique non-overlapping subset of candidates. Delegate all
+                   batch agents for the same category in a single parallel wave.
                 4. Delegate no more than the configured maximum and never invent names.
                 5. Give each subagent its exact task file path and source root path.
                    In the prompt to each subagent, include the literal string:
@@ -195,13 +199,23 @@ public class SupervisorAgent {
             Map<String, String> evidenceManifest,
             Map<String, Object> analysisSummary
     ) throws Exception {
-        int maxHunters = properties.enabled()
-                ? Math.min(
+        boolean hasBatches = candidates.stream().anyMatch(c -> c.contains("_batch_"));
+        int maxHunters = hasBatches || !properties.enabled()
+                ? candidates.size()
+                : Math.min(
                         candidates.size(),
                         properties.maxPrimaryHunters()
                                 + properties.maxAdditionalHunters()
-                )
-                : candidates.size();
+                );
+        String batchNote = hasBatches
+                ? """
+
+                BATCH AGENTS: Some categories have been split into parallel batches
+                (names ending in _batch_N). You MUST delegate ALL batch agents for each
+                category. Never skip a batch — each contains a unique subset of candidates.
+                Launch all batches for the same category in a single parallel wave.
+                """
+                : "";
         return """
                 Source root:
                 %s
@@ -217,7 +231,7 @@ public class SupervisorAgent {
 
                 Maximum delegated Hunters: %d
                 Intelligent selection enabled: %s
-
+                %s
                 White-box analysis summary (for cross-API chain reasoning):
                 %s
                 Use this summary to identify potential cross-API chains. For example,
@@ -237,6 +251,7 @@ public class SupervisorAgent {
                 objectMapper.writeValueAsString(evidenceManifest),
                 maxHunters,
                 properties.enabled(),
+                batchNote,
                 objectMapper.writerWithDefaultPrettyPrinter()
                         .writeValueAsString(analysisSummary)
         );
@@ -248,12 +263,16 @@ public class SupervisorAgent {
     ) throws Exception {
         JsonNode root = parseObject(response);
         LinkedHashSet<String> selected = new LinkedHashSet<>();
-        if (!properties.enabled()) {
+        boolean hasBatches = candidates.stream().anyMatch(c -> c.contains("_batch_"));
+        if (!properties.enabled() || hasBatches) {
             selected.addAll(candidates);
         } else {
-            MANDATORY.stream()
-                    .filter(candidates::contains)
-                    .forEach(selected::add);
+            for (String mandatory : MANDATORY) {
+                candidates.stream()
+                        .filter(c -> c.equals(mandatory)
+                                || c.startsWith(mandatory + "_batch_"))
+                        .forEach(selected::add);
+            }
             JsonNode selectedNode = root.path("selected_hunters");
             if (selectedNode.isArray()) {
                 selectedNode.forEach(node -> {
@@ -261,16 +280,19 @@ public class SupervisorAgent {
                     if (candidates.contains(hunter)) {
                         selected.add(hunter);
                     }
+                    candidates.stream()
+                            .filter(c -> c.startsWith(hunter + "_batch_"))
+                            .forEach(selected::add);
                 });
             }
         }
-        int limit = properties.enabled()
-                ? Math.min(
+        int limit = hasBatches || !properties.enabled()
+                ? candidates.size()
+                : Math.min(
                         candidates.size(),
                         properties.maxPrimaryHunters()
                                 + properties.maxAdditionalHunters()
-                )
-                : candidates.size();
+                );
         List<String> validatedSelection = new ArrayList<>(selected)
                 .subList(0, Math.min(limit, selected.size()));
 

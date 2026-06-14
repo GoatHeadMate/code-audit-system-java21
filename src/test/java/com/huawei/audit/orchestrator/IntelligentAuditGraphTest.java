@@ -31,7 +31,8 @@ class IntelligentAuditGraphTest {
                                 "sql_injection", "evidence/sql_injection.json",
                                 "ssrf", "evidence/ssrf.json"
                         ),
-                        Map.of("candidate_paths", 2)
+                        Map.of("candidate_paths", 2),
+                        List.of("sql_injection", "ssrf")
                 )
         );
         when(supervisor.run(any(), any(), any(), any(), any(), any())).thenReturn(

@@ -29,3 +29,4 @@ audit:
     enabled: ${INTELLIGENT_ORCHESTRATOR_ENABLED:true}
     max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}
     max-additional-hunters: ${MAX_ADDITIONAL_HUNTERS:5}
+    max-chunks-per-batch: ${MAX_CHUNKS_PER_BATCH:80}

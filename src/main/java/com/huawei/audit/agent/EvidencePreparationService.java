@@ -15,6 +15,7 @@ public interface EvidencePreparationService {
 
     record PreparationResult(
             Map<String, String> manifest,
-            Map<String, Object> analysisSummary
+            Map<String, Object> analysisSummary,
+            List<String> expandedCandidates
     ) { }
 }

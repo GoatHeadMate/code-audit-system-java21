@@ -4,7 +4,9 @@ import com.huawei.audit.agent.SubagentDefinitionService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -21,26 +23,38 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
         Files.createDirectories(agentsDirectory);
         Files.createDirectories(skillsDirectory);
 
+        Set<String> materializedSkills = new LinkedHashSet<>();
+
         for (String hunter : hunters) {
-            String dashed = hunter.replace('_', '-');
-            String skillName = "audit-" + dashed;
-            Path sourcePrompt = promptRoot.resolve("audit-" + dashed + ".md");
+            String baseHunter = baseHunterName(hunter);
+            String baseDashed = baseHunter.replace('_', '-');
+            String skillName = "audit-" + baseDashed;
+            Path sourcePrompt = promptRoot.resolve("audit-" + baseDashed + ".md");
             if (!Files.isRegularFile(sourcePrompt)) {
                 continue;
             }
 
-            String specialistKnowledge = Files.readString(sourcePrompt);
-            Path skillDirectory = skillsDirectory.resolve(skillName);
-            Files.createDirectories(skillDirectory);
-            Files.writeString(
-                    skillDirectory.resolve("SKILL.md"),
-                    skillDefinition(skillName, hunter, specialistKnowledge)
-            );
+            if (materializedSkills.add(skillName)) {
+                String specialistKnowledge = Files.readString(sourcePrompt);
+                Path skillDirectory = skillsDirectory.resolve(skillName);
+                Files.createDirectories(skillDirectory);
+                Files.writeString(
+                        skillDirectory.resolve("SKILL.md"),
+                        skillDefinition(skillName, baseHunter, specialistKnowledge)
+                );
+            }
+
+            String dashed = hunter.replace('_', '-');
             Files.writeString(
                     agentsDirectory.resolve("audit-" + dashed + ".md"),
-                    agentDefinition(dashed, skillName, hunter)
+                    agentDefinition(dashed, skillName, baseHunter)
             );
         }
+    }
+
+    static String baseHunterName(String hunter) {
+        int batchIdx = hunter.indexOf("_batch_");
+        return batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
     }
 
     private String agentDefinition(
