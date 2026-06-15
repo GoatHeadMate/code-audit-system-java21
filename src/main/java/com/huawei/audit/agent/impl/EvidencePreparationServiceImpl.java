@@ -1,6 +1,9 @@
 package com.huawei.audit.agent.impl;
 
+import com.fasterxml.jackson.core.util.DefaultIndenter;
+import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.ObjectWriter;
 import com.huawei.audit.agent.ClaudeGateway;
 import com.huawei.audit.agent.EvidencePreparationService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService;
@@ -42,6 +45,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
 
     private final WhiteBoxAnalysisService analysisService;
     private final ObjectMapper objectMapper;
+    private final ObjectWriter prettyWriter;
     private final JobLogBroker logs;
     private final ClaudeGateway claudeGateway;
     private final OrchestratorProperties orchestratorProperties;
@@ -58,6 +62,9 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     ) {
         this.analysisService = analysisService;
         this.objectMapper = objectMapper;
+        var printer = new DefaultPrettyPrinter()
+                .withArrayIndenter(DefaultIndenter.SYSTEM_LINEFEED_INSTANCE);
+        this.prettyWriter = objectMapper.writer(printer);
         this.logs = logs;
         this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
         this.orchestratorProperties = orchestratorProperties;
@@ -104,7 +111,15 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         index.put("unresolved_calls", absolute(analysisDirectory.resolve("unresolved-calls.json")));
         index.put("coverage", absolute(analysisDirectory.resolve("coverage.json")));
         index.put("parser_diagnostics", absolute(analysisDirectory.resolve("parser-diagnostics.json")));
-        index.put("summary", analysis.coverage());
+        var cov = analysis.coverage();
+        index.put("summary", Map.of(
+                "java_files", cov.javaFiles(),
+                "parsed_methods", cov.parsedMethods(),
+                "entrypoints", cov.discoveredEntryPoints(),
+                "sinks", cov.dangerousSinks(),
+                "candidate_paths", cov.candidatePaths(),
+                "stored_candidates", cov.storedCandidates()
+        ));
         writeJson(indexFile, index);
 
         Map<String, String> manifest = new LinkedHashMap<>();
@@ -136,7 +151,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         }
 
         Files.writeString(evidenceDirectory.resolve("manifest.json"),
-                objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(manifest));
+                prettyWriter.writeValueAsString(manifest));
         var coverage = analysis.coverage();
         logs.publish(job,
                 "[whitebox] entrypoints=" + coverage.discoveredEntryPoints()
@@ -243,7 +258,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             while (end < items.size() && end - start < ITEMS_PER_CHUNK) {
                 var candidate = Map.of(
                         "start_index", start, "end_index", end, "items", items.subList(start, end + 1));
-                int size = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(candidate).length;
+                int size = prettyWriter.writeValueAsBytes(candidate).length;
                 if (size > MAX_CHUNK_BYTES && end > start) break;
                 content = candidate;
                 end++;
@@ -264,7 +279,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     }
 
     private void writeJson(Path path, Object value) throws Exception {
-        objectMapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), value);
+        prettyWriter.writeValue(path.toFile(), value);
     }
 
     private String absolute(Path path) {
