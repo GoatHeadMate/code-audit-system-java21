@@ -242,14 +242,18 @@ final class DangerousSinkClassifier {
             String expression,
             String receiverType
     ) {
-        if (Set.of("forName", "loadClass", "defineClass").contains(method)) {
-            return true;
+        String target = (expression + " " + receiverType).toLowerCase(Locale.ROOT);
+        if ("forName".equals(method)) {
+            return containsAny(target, "class");
+        }
+        if ("loadClass".equals(method)) {
+            return containsAny(target, "classloader", "urlclassloader");
+        }
+        if ("defineClass".equals(method)) {
+            return containsAny(target, "classloader", "methodhandles", "lookup");
         }
         return Set.of("invoke", "newInstance").contains(method)
-                && containsAny(
-                        expression + " " + receiverType,
-                        "method", "constructor", "class"
-                );
+                && containsAny(target, "method", "constructor", "class");
     }
 
     private boolean isReplaceCommandExecution(String method, String lowerExpression) {
