@@ -1,16 +1,15 @@
 package com.huawei.audit.agent.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.audit.agent.ClaudeGateway;
 import com.huawei.audit.agent.EvidencePreparationService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CandidatePath;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StoredCandidate;
 import com.huawei.audit.config.AuditProperties;
 import com.huawei.audit.config.OrchestratorProperties;
-import com.huawei.audit.config.RuntimeExecutables;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
-import com.huawei.audit.process.ProcessRunner;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,7 +26,6 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private static final int ITEMS_PER_CHUNK = 50;
     private static final int MAX_CHUNK_BYTES = 64 * 1_024;
     private static final int MAX_UNRESOLVED_CALLS_WRITTEN = 5_000;
-    private static final int MAX_BATCHES_PER_HUNTER = 5;
     private static final List<String> REVIEW_CONTRACT = List.of(
             "Review every candidate path in this package.",
             "Review every stored candidate as a two-stage flow: HTTP write path, storage boundary, then execution path.",
@@ -45,8 +43,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final WhiteBoxAnalysisService analysisService;
     private final ObjectMapper objectMapper;
     private final JobLogBroker logs;
-    private final ProcessRunner processRunner;
-    private final RuntimeExecutables executables;
+    private final ClaudeGateway claudeGateway;
     private final OrchestratorProperties orchestratorProperties;
     private final Semaphore analysisSlot = new Semaphore(1, true);
     private final long analysisTimeoutMs;
@@ -57,16 +54,14 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             JobLogBroker logs,
             AuditProperties properties,
             OrchestratorProperties orchestratorProperties,
-            ProcessRunner processRunner,
-            RuntimeExecutables executables
+            ClaudeGateway claudeGateway
     ) {
         this.analysisService = analysisService;
         this.objectMapper = objectMapper;
         this.logs = logs;
         this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
         this.orchestratorProperties = orchestratorProperties;
-        this.processRunner = processRunner;
-        this.executables = executables;
+        this.claudeGateway = claudeGateway;
     }
 
     @Override
@@ -110,7 +105,6 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         index.put("coverage", absolute(analysisDirectory.resolve("coverage.json")));
         index.put("parser_diagnostics", absolute(analysisDirectory.resolve("parser-diagnostics.json")));
         index.put("summary", analysis.coverage());
-        index.put("codeql_used", false);
         writeJson(indexFile, index);
 
         Map<String, String> manifest = new LinkedHashMap<>();
@@ -169,7 +163,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<String> expandedCandidates, AuditJob job
     ) throws Exception {
         int totalChunks = candChunks.size() + storedChunks.size();
-        int batchCount = Math.min((totalChunks + maxChunks - 1) / maxChunks, MAX_BATCHES_PER_HUNTER);
+        int batchCount = (totalChunks + maxChunks - 1) / maxChunks;
         int candPerBatch = (candChunks.size() + batchCount - 1) / batchCount;
         int storedPerBatch = (storedChunks.size() + batchCount - 1) / batchCount;
         logs.publish(job, "[whitebox] splitting " + hunter + " into " + batchCount
@@ -229,8 +223,11 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         }
         try {
             logs.publish(job, "[whitebox] indexing source in bounded batches");
-            return analysisService.analyze(sourceRoot, dependencies,
-                    processRunner, executables == null ? null : executables.claude());
+            return analysisService.analyze(
+                    sourceRoot,
+                    dependencies,
+                    claudeGateway
+            );
         } finally {
             analysisSlot.release();
         }
