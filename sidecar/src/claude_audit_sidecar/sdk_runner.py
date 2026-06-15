@@ -1,4 +1,3 @@
-import os
 from collections.abc import AsyncIterator
 from typing import Literal, assert_never
 
@@ -52,8 +51,9 @@ class ClaudeSdkRunner:
 
     @staticmethod
     def _build_env(settings: Settings) -> dict[str, str]:
-        env = os.environ.copy()
-        env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "huawei-code-audit-sidecar/0.1.0"
+        env: dict[str, str] = {
+            "CLAUDE_AGENT_SDK_CLIENT_APP": "huawei-code-audit-sidecar/0.1.0",
+        }
         if settings.anthropic_api_key:
             env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
         if settings.anthropic_base_url:
@@ -66,7 +66,7 @@ class ClaudeSdkRunner:
             allowed_tools=[],
             permission_mode="dontAsk",
             cwd=request.working_directory,
-            setting_sources=[],
+            setting_sources=["user"],
             env=self._env,
         )
         try:
@@ -117,7 +117,7 @@ class ClaudeSdkRunner:
                 "append": _SUPERVISOR_SYSTEM_PROMPT,
             },
             agents=agents,
-            setting_sources=[],
+            setting_sources=["user"],
             env=self._env,
         )
         active: dict[str, str] = {}
