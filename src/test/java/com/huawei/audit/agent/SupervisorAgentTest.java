@@ -24,8 +24,8 @@ class SupervisorAgentTest {
     @Test
     void filtersDelegationToCandidateWhitelistAndMandatoryHunters()
             throws Exception {
-        ClaudeCodeSupervisorModel model = mock(ClaudeCodeSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any())).thenReturn("""
+        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
+        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
                 {
                   "selected_hunters": ["ssrf", "not-a-real-agent"],
                   "rationale": "Spring HTTP client surface",
@@ -88,8 +88,8 @@ class SupervisorAgentTest {
     @Test
     void parsesFencedEnvelopeAfterTextContainingTemplateBraces()
             throws Exception {
-        ClaudeCodeSupervisorModel model = mock(ClaudeCodeSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any())).thenReturn("""
+        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
+        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
                 All subagent audits completed.
                 SQL Injection: `${orderByClause}` requires review.
 

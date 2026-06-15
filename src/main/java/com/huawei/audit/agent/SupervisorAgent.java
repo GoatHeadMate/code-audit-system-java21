@@ -11,6 +11,7 @@ import dev.langchain4j.data.message.UserMessage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -33,14 +34,14 @@ public class SupervisorAgent {
             "component_vulns"
     );
 
-    private final ClaudeCodeSupervisorModel model;
+    private final ClaudeAgentSupervisorModel model;
     private final ObjectMapper objectMapper;
     private final FindingParser findingParser;
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
 
     public SupervisorAgent(
-            ClaudeCodeSupervisorModel model,
+            ClaudeAgentSupervisorModel model,
             ObjectMapper objectMapper,
             FindingParser findingParser,
             OrchestratorProperties properties,
@@ -62,9 +63,14 @@ public class SupervisorAgent {
             Map<String, String> instructionManifest,
             Map<String, Object> analysisSummary
     ) throws Exception {
+        Map<String, ClaudeGateway.AgentDef> agents = buildAgentDefs(
+                sourceRoot, candidates, evidenceManifest, instructionManifest
+        );
         logs.publish(
                 job,
-                "[supervisor-agent] starting one Claude Code session with native subagents"
+                "[supervisor-agent] starting one Claude Agent SDK session"
+                        + " with " + agents.size() + " pre-defined agents: "
+                        + String.join(", ", agents.keySet())
         );
         String response = model.supervise(
                 job.workDir(),
@@ -75,11 +81,10 @@ public class SupervisorAgent {
                                 sourceRoot,
                                 techProfile,
                                 candidates,
-                                evidenceManifest,
-                                instructionManifest,
                                 analysisSummary
                         ))
                 ),
+                agents,
                 line -> logs.publish(job, line)
         );
         Files.writeString(
@@ -116,6 +121,46 @@ public class SupervisorAgent {
         }
     }
 
+    private Map<String, ClaudeGateway.AgentDef> buildAgentDefs(
+            Path sourceRoot,
+            List<String> candidates,
+            Map<String, String> evidenceManifest,
+            Map<String, String> instructionManifest
+    ) {
+        Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
+        String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
+        List<String> readOnlyTools = List.of("Read", "Glob", "Grep");
+        for (String hunter : candidates) {
+            String taskPath = evidenceManifest.get(hunter);
+            if (taskPath == null) {
+                continue;
+            }
+            String baseHunter = baseHunterName(hunter);
+            String instructionPath = instructionManifest.getOrDefault(
+                    baseHunter, ""
+            );
+            String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
+                    hunter,
+                    instructionPath,
+                    taskPath,
+                    sourceRootStr
+            );
+            agents.put(hunter, new ClaudeGateway.AgentDef(
+                    "Audit " + hunter.replace('_', ' ')
+                            + " vulnerabilities in the target project",
+                    agentPrompt,
+                    readOnlyTools,
+                    null
+            ));
+        }
+        return agents;
+    }
+
+    private static String baseHunterName(String hunter) {
+        int batchIdx = hunter.indexOf("_batch_");
+        return batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+    }
+
     private String systemPrompt() {
         return """
                 You are the main enterprise white-box audit supervisor.
@@ -130,28 +175,13 @@ public class SupervisorAgent {
                 ════════════════════════════════════════════════════════════════
 
                 ════════════════════════════════════════════════════════════════
-                AGENT DELEGATION — CRITICAL INSTRUCTIONS
+                AGENT DELEGATION — USE PRE-DEFINED AGENTS BY NAME
                 ════════════════════════════════════════════════════════════════
-                You delegate work using the Agent tool. Each delegation MUST use
-                ONLY these two parameters:
-                  - "description": short label (e.g. "code_execution batch 1 audit")
-                  - "prompt": full instructions for the subagent
-
-                ██ NEVER use the "subagent_type" parameter. It does NOT work. ██
-                ██ NEVER use the "name" parameter.                             ██
-
-                The prompt you give each subagent must contain:
-                1. The path to the INSTRUCTION file (category rules + knowledge)
-                2. The path to the TASK file (candidate paths to review)
-                3. The source root path
-                4. A directive: "Read the instruction file FIRST, then read the
-                   task file, then review every chunk listed in the task file."
-
-                Example Agent call:
-                Agent(
-                  description: "code_execution batch 1 audit",
-                  prompt: "You are a white-box audit subagent. Read the instruction file at D:/workspace/instructions/audit-code-execution.md for your rules and category knowledge. Then read your task file at D:/workspace/evidence/packages/code_execution/task-batch-1.json. Source root: D:/project. Review EVERY candidate-path chunk and stored-candidate chunk. Return a single JSON object: {\"chunks_reviewed\": N, \"findings\": [...]}. No markdown, no explanatory text."
-                )
+                All hunter subagents are pre-registered by name. To invoke one,
+                use the Agent tool with subagent_type set to the hunter name.
+                Example: Agent(subagent_type: "code_execution", prompt: "Begin audit")
+                Each agent already has its instruction file, task file and source
+                root embedded in its definition. You only need to tell it to start.
                 ════════════════════════════════════════════════════════════════
 
                 Java has already built white-box candidate paths from external entrypoints
@@ -161,54 +191,39 @@ public class SupervisorAgent {
                 aggregate confirmed findings. Do not repeat broad source discovery yourself.
 
                 Rules:
-                1. Delegate each selected category to its matching subagent.
-                2. Launch independent subagents in parallel in a single delegation wave
+                1. Delegate each selected category to its matching pre-defined agent.
+                2. Launch independent agents in parallel in a single delegation wave
                    whenever possible.
                 3. Code execution, authorization, unsafe parsing, file operations, SSRF
-                   and component vulnerabilities are mandatory when available because they
-                   can directly enable RCE or materially affect remote reachability.
+                   and component vulnerabilities are mandatory when available.
                    When a category is split into batch agents (e.g., code_execution_batch_1,
-                   code_execution_batch_2, ...), ALL batches are mandatory. Each batch
-                   contains a unique non-overlapping subset of candidates. Delegate all
-                   batch agents for the same category in a single parallel wave.
+                   code_execution_batch_2), ALL batches are mandatory — each contains a
+                   unique non-overlapping subset of candidates.
                 4. Delegate no more than the configured maximum and never invent names.
-                5. Give each subagent its exact instruction file path, task file path,
-                   and source root path in the prompt.
-                6. Subagents use Read/Glob/Grep. Never request Bash or CodeQL.
-                7. If a subagent returns an agentId and says "use SendMessage to continue",
-                   you MUST use SendMessage with that agentId to resume it. Never create
-                   a new Agent for the same hunter — always continue the existing one.
-                8. Review returned findings, remove duplicates and obvious false positives.
+                5. If a subagent returns an agentId and says "use SendMessage to continue",
+                   you MUST use SendMessage with that agentId to resume it.
+                6. Review returned findings, remove duplicates and obvious false positives.
                    Reject findings that name a sink but do not validate the candidate
                    entrypoint, dispatch path and attacker-controlled value flow.
-                9. Each finding MUST include these fields:
+                7. Each finding MUST include these fields:
                    rule_id, title, severity (CRITICAL/HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
                    vuln_type (e.g. SQL_INJECTION, SSRF, XSS), file_path, start_line,
                    message, evidence, data_flow_path (array of strings), http_method,
                    http_path, entrypoint, reachability and discovery_source.
                    Omitting any of these fields makes the finding unparseable.
-                10. Before finalizing, verify each subagent confirmed it reviewed all
-                    candidate chunks. If a subagent skipped chunks, resume it with
-                    SendMessage. Treat unresolved entrypoints and calls as coverage
-                    limitations, not confirmed vulnerabilities.
-                11. Return format:
+                8. Before finalizing, verify each subagent confirmed it reviewed all
+                   candidate chunks. If a subagent skipped chunks, resume it.
+                9. Return format:
                    {"selected_hunters":["..."],"rationale":"...","findings":[...]}
-                12. After gathering all subagent findings, perform a CROSS-API CHAIN
+                10. After gathering all subagent findings, perform a CROSS-API CHAIN
                    COMPOSITION analysis before returning. Specifically:
                    a. If both SSRF and COMMAND_INJECTION/DESERIALIZATION findings exist,
                       check whether the SSRF target URL could reach the command injection
                       endpoint's internal path. Report the combined chain as a separate
                       CRITICAL finding with vuln_type "ATTACK_CHAIN".
-                   b. Inspect proxy/forwarding utilities (BackendRestClient, RestTemplate,
-                      HttpClient wrappers) for automatic credential injection — if the
-                      proxy auto-adds authentication headers (x-user-name, Authorization,
-                      x-user-id, etc.), note this in the chain finding as it upgrades
-                      SSRF from "can make requests" to "can make authenticated admin
-                      requests to internal APIs".
+                   b. Inspect proxy/forwarding utilities for automatic credential injection.
                    c. For weak whitelist (contains/startsWith) findings, reason about
-                      concrete bypass techniques: query parameter embedding
-                      (?x=whitelisted_path), path traversal, fragment injection,
-                      subdomain tricks. Include the bypass technique in the finding.
+                      concrete bypass techniques.
                    d. If an endpoint missing authentication can reach another endpoint
                       that has command execution, combine them into a single chain
                       finding showing the full unauthenticated-to-RCE path.
@@ -219,8 +234,6 @@ public class SupervisorAgent {
             Path sourceRoot,
             Map<String, Object> techProfile,
             List<String> candidates,
-            Map<String, String> evidenceManifest,
-            Map<String, String> instructionManifest,
             Map<String, Object> analysisSummary
     ) throws Exception {
         boolean hasBatches = candidates.stream().anyMatch(c -> c.contains("_batch_"));
@@ -234,26 +247,18 @@ public class SupervisorAgent {
         String batchNote = hasBatches
                 ? """
 
-                BATCH AGENTS: Some categories have been split into parallel batches
-                (names ending in _batch_N). You MUST delegate ALL batch agents for each
-                category. Never skip a batch — each contains a unique subset of candidates.
+                BATCH AGENTS: Some categories have been split into parallel batches.
+                You MUST delegate ALL batch agents for each category.
                 Launch all batches for the same category in a single parallel wave.
                 """
                 : "";
         return """
-                Source root:
-                %s
+                Source root: %s
 
                 Technology profile:
                 %s
 
-                Available Hunter categories:
-                %s
-
-                Task file manifest (hunter → task file path):
-                %s
-
-                Instruction file manifest (base category → instruction file path):
+                Pre-defined hunter agents (invoke by name via Agent tool):
                 %s
 
                 Maximum delegated Hunters: %d
@@ -263,28 +268,17 @@ public class SupervisorAgent {
                 %s
 
                 DELEGATION INSTRUCTIONS:
-                For each hunter in the task file manifest, delegate an Agent with:
-                - description: "<hunter_name> audit"
-                - prompt: Include: (1) instruction file path from the instruction manifest
-                  (use the base category, e.g. for "code_execution_batch_1" use "code_execution"),
-                  (2) task file path from the task manifest, (3) source root path above.
-                  Tell the subagent to read instruction file first, then task file, then
-                  review all chunks.
-
-                REMEMBER: Do NOT use subagent_type parameter. Only use description + prompt.
+                Invoke each pre-defined agent by name. Example:
+                  Agent(subagent_type: "code_execution", prompt: "Begin audit")
+                All agent definitions already contain instruction files, task files,
+                and source root. You do not need to pass file paths in the prompt.
 
                 Select the specialists appropriate for this project. When intelligent
-                selection is disabled, delegate all available Hunters. Each evidence file is
-                a bounded white-box review package containing precomputed entrypoint-to-sink
-                candidate paths for that category. CodeQL is disabled. Java owns broad
-                discovery and coverage; Hunters own semantic validation and false-positive
-                suppression.
+                selection is disabled, delegate all available agents.
                 """.formatted(
                 sourceRoot.toAbsolutePath().normalize(),
                 objectMapper.writeValueAsString(techProfile),
                 objectMapper.writeValueAsString(candidates),
-                objectMapper.writeValueAsString(evidenceManifest),
-                objectMapper.writeValueAsString(instructionManifest),
                 maxHunters,
                 properties.enabled(),
                 batchNote,
@@ -292,6 +286,28 @@ public class SupervisorAgent {
                         .writeValueAsString(analysisSummary)
         );
     }
+
+    private static final String SUBAGENT_PROMPT_TEMPLATE = """
+            You are a white-box code audit subagent for the `%s` category.
+
+            Your instruction file (category rules and specialist knowledge):
+            %s
+
+            Your task file (candidate paths to review):
+            %s
+
+            Source root:
+            %s
+
+            Execution steps:
+            1. Read the instruction file FIRST to learn your audit rules.
+            2. Read the task file to get all candidate-path chunks.
+            3. Review EVERY candidate-path chunk and stored-candidate chunk.
+            4. For each candidate, validate the entrypoint-to-sink path against source code.
+            5. Use Read/Glob/Grep to resolve ambiguous dispatch and missing source slices.
+            6. Return a single JSON object: {"chunks_reviewed": N, "findings": [...]}
+            7. No markdown fences, no explanatory text around the JSON.
+            """;
 
     private SupervisorEnvelope parseEnvelope(
             String response,
