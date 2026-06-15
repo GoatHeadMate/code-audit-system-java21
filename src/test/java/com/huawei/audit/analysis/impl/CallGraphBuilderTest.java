@@ -114,6 +114,7 @@ class CallGraphBuilderTest {
                 receiverType,
                 argumentCount,
                 List.of("Object"),
+                List.of("arg"),
                 1,
                 receiver + "." + methodName + "(arg)"
         );

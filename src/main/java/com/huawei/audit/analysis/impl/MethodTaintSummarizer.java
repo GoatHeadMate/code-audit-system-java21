@@ -54,11 +54,17 @@ final class MethodTaintSummarizer {
 
         for (CallSite call : method.calls()) {
             String expression = call.expression() != null ? call.expression() : "";
+            List<String> argExprs = call.argumentExpressions() != null
+                    ? call.argumentExpressions() : List.of();
 
-            for (int argIdx = 0; argIdx < call.argumentTypes().size(); argIdx++) {
+            for (int argIdx = 0; argIdx < call.argumentCount(); argIdx++) {
+                String argExpr = argIdx < argExprs.size() ? argExprs.get(argIdx) : "";
+                if (argExpr.isBlank()) {
+                    continue;
+                }
                 for (var taintEntry : variableTaint.entrySet()) {
                     String varName = taintEntry.getKey();
-                    if (expressionReferencesVariable(expression, varName)) {
+                    if (expressionReferencesVariable(argExpr, varName)) {
                         for (int paramIdx : taintEntry.getValue()) {
                             String propType = inferPropagationType(call.methodName());
                             flows.add(new TaintFlow(

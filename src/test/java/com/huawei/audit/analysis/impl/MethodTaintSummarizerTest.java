@@ -27,6 +27,7 @@ class MethodTaintSummarizerTest {
                 List.of(new CallSite(
                         "exec", "", "", 1,
                         List.of("String"),
+                        List.of("input"),
                         5,
                         "exec(input)"
                 )),
@@ -58,6 +59,7 @@ class MethodTaintSummarizerTest {
                 List.of(new CallSite(
                         "replace", "template", "String", 2,
                         List.of("String", "String"),
+                        List.of("\"${key}\"", "value"),
                         5,
                         "template.replace(\"${key}\", value)"
                 )),

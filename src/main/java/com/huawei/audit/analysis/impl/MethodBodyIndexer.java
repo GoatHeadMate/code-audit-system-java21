@@ -68,6 +68,9 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
                 tree.getArguments().stream()
                         .map(this::expressionType)
                         .toList(),
+                tree.getArguments().stream()
+                        .map(arg -> source.sourceText(arg, 200))
+                        .toList(),
                 source.line(tree, true),
                 expression
         ));
@@ -124,6 +127,9 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
                     tree.getArguments().size(),
                     tree.getArguments().stream()
                             .map(this::expressionType)
+                            .toList(),
+                    tree.getArguments().stream()
+                            .map(arg -> source.sourceText(arg, 200))
                             .toList(),
                     source.line(tree, true),
                     source.sourceText(tree, 500)

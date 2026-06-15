@@ -146,7 +146,7 @@ class MethodTaintAnalyzerTest {
     ) {
         return new CallSite(
                 methodName, receiver, receiverType, argumentCount,
-                List.of("String"), 1, expression
+                List.of("String"), List.of("arg"), 1, expression
         );
     }
 }

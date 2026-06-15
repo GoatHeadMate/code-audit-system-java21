@@ -1,5 +1,6 @@
 package com.huawei.audit.analysis;
 
+import com.huawei.audit.agent.ClaudeGateway;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -9,8 +10,7 @@ public interface WhiteBoxAnalysisService {
     AnalysisResult analyze(
             Path sourceRoot,
             List<Map<String, String>> dependencies,
-            com.huawei.audit.process.ProcessRunner processRunner,
-            String claudeBin
+            ClaudeGateway claudeGateway
     ) throws Exception;
 
     record EntryPoint(
@@ -62,6 +62,7 @@ public interface WhiteBoxAnalysisService {
             String receiverType,
             int argumentCount,
             List<String> argumentTypes,
+            List<String> argumentExpressions,
             int line,
             String expression
     ) { }

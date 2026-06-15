@@ -198,6 +198,7 @@ class ConfigTemplateScannerTest {
                 receiverType,
                 argumentCount,
                 List.of("String"),
+                List.of("arg"),
                 1,
                 receiver + "." + methodName + "(arg)"
         );
