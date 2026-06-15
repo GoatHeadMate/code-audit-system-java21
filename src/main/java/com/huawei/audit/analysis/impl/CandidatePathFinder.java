@@ -74,7 +74,8 @@ final class CandidatePathFinder {
                                 state.edges().size(),
                                 "PENDING_CLAUDE_REVIEW",
                                 "PENDING",
-                                List.of()
+                                List.of(),
+                                "UNKNOWN"
                         ));
                     }
                 }

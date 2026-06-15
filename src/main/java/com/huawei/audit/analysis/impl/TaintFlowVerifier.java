@@ -30,7 +30,8 @@ final class TaintFlowVerifier {
                     candidate.callDepth(),
                     candidate.reviewStatus(),
                     verification.confidence(),
-                    verification.trace()
+                    verification.trace(),
+                    verification.sourceClassification()
             ));
         }
         return List.copyOf(result);
@@ -45,7 +46,7 @@ final class TaintFlowVerifier {
         List<String> trace = new ArrayList<>();
 
         if (steps.isEmpty()) {
-            return new VerificationResult("NONE", trace);
+            return new VerificationResult("NONE", trace, "UNKNOWN");
         }
 
         String entryMethodId = steps.getFirst().methodId();
@@ -175,7 +176,29 @@ final class TaintFlowVerifier {
             confidence = "STRUCTURAL";
         }
 
-        return new VerificationResult(confidence, List.copyOf(trace));
+        String sourceClassification = classifySource(protocol, candidate);
+        return new VerificationResult(confidence, List.copyOf(trace), sourceClassification);
+    }
+
+    private static String classifySource(String protocol, CandidatePath candidate) {
+        if ("HTTP".equalsIgnoreCase(protocol)
+                || "MESSAGE".equalsIgnoreCase(protocol)) {
+            return "REQUEST_CONTROLLED";
+        }
+        if ("LIFECYCLE".equalsIgnoreCase(protocol)
+                || "INIT".equalsIgnoreCase(protocol)) {
+            return "INTERNAL_DERIVED";
+        }
+        if ("SCHEDULED".equalsIgnoreCase(protocol)) {
+            return "INTERNAL_DERIVED";
+        }
+        if (candidate.entryPoint() != null) {
+            String framework = candidate.entryPoint().framework();
+            if (framework != null && framework.toLowerCase().contains("config")) {
+                return "CONFIG_CONTROLLED";
+            }
+        }
+        return "UNKNOWN";
     }
 
     private String abbreviate(String methodId) {
@@ -206,5 +229,6 @@ final class TaintFlowVerifier {
         return count;
     }
 
-    private record VerificationResult(String confidence, List<String> trace) { }
+    private record VerificationResult(
+            String confidence, List<String> trace, String sourceClassification) { }
 }

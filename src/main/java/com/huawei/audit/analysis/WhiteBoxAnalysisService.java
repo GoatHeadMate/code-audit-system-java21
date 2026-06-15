@@ -95,7 +95,8 @@ public interface WhiteBoxAnalysisService {
             int callDepth,
             String reviewStatus,
             String taintConfidence,
-            List<String> taintTrace
+            List<String> taintTrace,
+            String sourceClassification
     ) { }
 
     record StorageAccess(

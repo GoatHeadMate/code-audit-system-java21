@@ -33,11 +33,24 @@ final class StoredCandidateCorrelator {
                     if (!seen.add(key)) {
                         continue;
                     }
+                    CandidatePath storageExec = new CandidatePath(
+                            execution.id(),
+                            execution.entryPoint(),
+                            execution.sink(),
+                            execution.methodPath(),
+                            execution.callEdges(),
+                            execution.staticConfidence(),
+                            execution.callDepth(),
+                            execution.reviewStatus(),
+                            execution.taintConfidence(),
+                            execution.taintTrace(),
+                            "STORAGE_CONTROLLED"
+                    );
                     result.add(new StoredCandidate(
                             "stored-candidate-" + sequence++,
                             read.storageKey(),
                             write,
-                            execution,
+                            storageExec,
                             read,
                             correlationConfidence(write.writeAccess(), read),
                             "PENDING_CLAUDE_REVIEW"
