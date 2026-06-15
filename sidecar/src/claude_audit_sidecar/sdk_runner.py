@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 from typing import Literal, assert_never
 
@@ -47,6 +48,17 @@ _READ_ONLY_TOOLS = ["Agent", "SendMessage", "Read", "Glob", "Grep"]
 class ClaudeSdkRunner:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._env = self._build_env(settings)
+
+    @staticmethod
+    def _build_env(settings: Settings) -> dict[str, str]:
+        env = os.environ.copy()
+        env["CLAUDE_AGENT_SDK_CLIENT_APP"] = "huawei-code-audit-sidecar/0.1.0"
+        if settings.anthropic_api_key:
+            env["ANTHROPIC_API_KEY"] = settings.anthropic_api_key
+        if settings.anthropic_base_url:
+            env["ANTHROPIC_BASE_URL"] = settings.anthropic_base_url
+        return env
 
     async def query(self, request: QueryRequest) -> str:
         options = ClaudeAgentOptions(
@@ -55,7 +67,7 @@ class ClaudeSdkRunner:
             permission_mode="dontAsk",
             cwd=request.working_directory,
             setting_sources=[],
-            env={"CLAUDE_AGENT_SDK_CLIENT_APP": "huawei-code-audit-sidecar/0.1.0"},
+            env=self._env,
         )
         try:
             async for message in query(prompt=request.prompt, options=options):
@@ -106,7 +118,7 @@ class ClaudeSdkRunner:
             },
             agents=agents,
             setting_sources=[],
-            env={"CLAUDE_AGENT_SDK_CLIENT_APP": "huawei-code-audit-sidecar/0.1.0"},
+            env=self._env,
         )
         active: dict[str, str] = {}
         completed = 0
