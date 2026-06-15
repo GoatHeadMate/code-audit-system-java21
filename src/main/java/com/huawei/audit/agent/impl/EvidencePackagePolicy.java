@@ -13,27 +13,16 @@ final class EvidencePackagePolicy {
     private static final Map<String, Set<String>> HUNTER_SINKS = Map.ofEntries(
             Map.entry("code_execution", Set.of(
                     "COMMAND_EXECUTION",
-                    "NATIVE_LIBRARY",
-                    "SERVLET_ENTRY",
                     "SCRIPT_OR_EXPRESSION_EXECUTION",
-                    "DYNAMIC_LOADING"
+                    "NATIVE_LIBRARY"
             )),
-            Map.entry("sql_injection", Set.of("SQL_EXECUTION")),
+            Map.entry("sql_injection", Set.of(
+                    "SQL_EXECUTION"
+            )),
             Map.entry("ssrf", Set.of(
-                    "OUTBOUND_HTTP",
-                    "COMMAND_EXECUTION",
-                    "JNDI_LOOKUP",
-                    "NATIVE_DESERIALIZATION"
+                    "OUTBOUND_HTTP"
             )),
             Map.entry("authorization", Set.of(
-                    "COMMAND_EXECUTION",
-                    "SCRIPT_OR_EXPRESSION_EXECUTION",
-                    "NATIVE_DESERIALIZATION",
-                    "DYNAMIC_LOADING",
-                    "JNDI_LOOKUP",
-                    "NATIVE_LIBRARY",
-                    "FILE_WRITE",
-                    "OUTBOUND_HTTP",
                     "SERVLET_ENTRY",
                     "FILTER_ENTRY"
             )),
@@ -48,16 +37,10 @@ final class EvidencePackagePolicy {
                     "HTTP_REDIRECT"
             )),
             Map.entry("file_operations", Set.of(
-                    "COMMAND_EXECUTION",
-                    "NATIVE_LIBRARY",
-                    "DYNAMIC_LOADING",
                     "FILE_WRITE"
             )),
             Map.entry("component_vulns", Set.of(
                     "ACTUATOR_ENDPOINT",
-                    "COMMAND_EXECUTION",
-                    "SCRIPT_OR_EXPRESSION_EXECUTION",
-                    "DYNAMIC_LOADING",
                     "JNDI_LOOKUP"
             ))
     );
