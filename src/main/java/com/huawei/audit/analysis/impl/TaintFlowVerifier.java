@@ -50,20 +50,40 @@ final class TaintFlowVerifier {
 
         String entryMethodId = steps.getFirst().methodId();
         TaintSummary entrySummary = summaries.get(entryMethodId);
+        String protocol = candidate.entryPoint() != null
+                ? candidate.entryPoint().protocol() : "";
+        int declaredParamCount = entrySummary != null
+                ? entrySummary.parameterFlows().stream()
+                        .mapToInt(f -> f.sourceParamIndex() + 1)
+                        .max().orElse(0)
+                : 0;
 
         Set<Integer> currentTaintedParams = new HashSet<>();
-        if (entrySummary != null) {
-            for (int i = 0; i < Math.max(4, entrySummary.parameterFlows().size() + 1); i++) {
+        String sourceDesc;
+        if ("HTTP".equalsIgnoreCase(protocol)
+                || "MESSAGE".equalsIgnoreCase(protocol)) {
+            int paramCount = Math.max(declaredParamCount,
+                    steps.getFirst().signature() != null
+                            ? countCommas(steps.getFirst().signature()) + 1 : 1);
+            for (int i = 0; i < paramCount; i++) {
                 currentTaintedParams.add(i);
             }
+            sourceDesc = protocol + " parameters [0.." + (paramCount - 1)
+                    + "] are taint sources";
+        } else if ("LIFECYCLE".equalsIgnoreCase(protocol)
+                || "SCHEDULED".equalsIgnoreCase(protocol)
+                || "INIT".equalsIgnoreCase(protocol)) {
+            sourceDesc = protocol + " entry — no external taint sources";
+        } else {
+            for (int i = 0; i < Math.max(1, declaredParamCount); i++) {
+                currentTaintedParams.add(i);
+            }
+            sourceDesc = "unknown protocol — conservatively marking "
+                    + currentTaintedParams.size() + " params as tainted";
         }
-        currentTaintedParams.add(0);
-        currentTaintedParams.add(1);
-        currentTaintedParams.add(2);
-        currentTaintedParams.add(3);
 
-        trace.add("Entry: " + steps.getFirst().className() + "." + steps.getFirst().methodName()
-                + " — all HTTP parameters are taint sources");
+        trace.add("Entry: " + steps.getFirst().className() + "."
+                + steps.getFirst().methodName() + " — " + sourceDesc);
 
         boolean taintReachesSink = false;
         boolean hasStringPropagation = false;
@@ -161,6 +181,29 @@ final class TaintFlowVerifier {
     private String abbreviate(String methodId) {
         int atIdx = methodId.indexOf('@');
         return atIdx > 0 ? methodId.substring(0, atIdx) : methodId;
+    }
+
+    private static int countCommas(String signature) {
+        if (signature == null || signature.isBlank()) {
+            return 0;
+        }
+        int parensStart = signature.indexOf('(');
+        int parensEnd = signature.lastIndexOf(')');
+        if (parensStart < 0 || parensEnd <= parensStart + 1) {
+            return 0;
+        }
+        String params = signature.substring(parensStart + 1, parensEnd).trim();
+        if (params.isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        int depth = 0;
+        for (char c : params.toCharArray()) {
+            if (c == '<') depth++;
+            else if (c == '>') depth--;
+            else if (c == ',' && depth == 0) count++;
+        }
+        return count;
     }
 
     private record VerificationResult(String confidence, List<String> trace) { }
