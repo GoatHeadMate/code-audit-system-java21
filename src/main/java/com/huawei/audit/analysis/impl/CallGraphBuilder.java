@@ -111,8 +111,10 @@ final class CallGraphBuilder {
     ) {
         LinkedHashMap<String, ResolvedTarget> targets = new LinkedHashMap<>();
         String receiverType = call.receiverType();
+        boolean attemptedTypeLookup = false;
 
         if (receiverType != null && !receiverType.isBlank()) {
+            attemptedTypeLookup = true;
             addClassTargets(
                     targets,
                     index,
@@ -148,6 +150,7 @@ final class CallGraphBuilder {
         }
         if (targets.isEmpty()
                 && AnalysisTextUtils.startsUppercase(call.receiver())) {
+            attemptedTypeLookup = true;
             addClassTargets(
                     targets,
                     index,
@@ -163,6 +166,7 @@ final class CallGraphBuilder {
                 && !"super".equals(call.receiver())
                 && !call.receiver().contains("(")
                 && Character.isLowerCase(call.receiver().charAt(0))) {
+            attemptedTypeLookup = true;
             String inferredType = Character.toUpperCase(
                     call.receiver().charAt(0))
                     + call.receiver().substring(1);
@@ -187,18 +191,20 @@ final class CallGraphBuilder {
             }
         }
 
-        List<MethodNode> byName = index.methodsByName()
-                .getOrDefault(call.methodName(), List.of())
-                .stream()
-                .filter(method ->
-                        method.parameterCount() == call.argumentCount())
-                .toList();
-        if (targets.isEmpty() && byName.size() == 1) {
-            MethodNode target = byName.getFirst();
-            targets.put(
-                    target.id(),
-                    new ResolvedTarget(target, "unique-method-name")
-            );
+        if (targets.isEmpty() && !attemptedTypeLookup) {
+            List<MethodNode> byName = index.methodsByName()
+                    .getOrDefault(call.methodName(), List.of())
+                    .stream()
+                    .filter(method ->
+                            method.parameterCount() == call.argumentCount())
+                    .toList();
+            if (byName.size() == 1) {
+                MethodNode target = byName.getFirst();
+                targets.put(
+                        target.id(),
+                        new ResolvedTarget(target, "unique-method-name-untyped")
+                );
+            }
         }
         return List.copyOf(targets.values());
     }
