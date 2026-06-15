@@ -34,6 +34,7 @@ public class ClaudeSidecarClient implements ClaudeGateway {
         this.apiToken = properties.claudeSidecarToken();
         this.defaultTimeout = properties.claudeSidecarTimeout();
         this.httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(defaultTimeout)
                 .build();
         this.objectMapper = objectMapper;
