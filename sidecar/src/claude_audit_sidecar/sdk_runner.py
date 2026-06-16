@@ -117,7 +117,10 @@ class ClaudeSdkRunner:
                 "append": _SUPERVISOR_SYSTEM_PROMPT,
             },
             agents=agents,
-            setting_sources=["user"],
+            skills="all",
+            # "user" keeps Claude auth/settings; "project" makes the per-job
+            # .claude/skills/ generated under cwd discoverable by the CLI.
+            setting_sources=["user", "project"],
             env=self._env,
         )
         active: dict[str, str] = {}
@@ -207,6 +210,8 @@ def _build_agents(
         }
         if defn.model is not None:
             kwargs["model"] = defn.model
+        if defn.skills:
+            kwargs["skills"] = defn.skills
         result[name] = AgentDefinition(**kwargs)
     return result
 

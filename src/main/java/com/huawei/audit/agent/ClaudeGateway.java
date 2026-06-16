@@ -23,6 +23,7 @@ public interface ClaudeGateway {
             String description,
             String prompt,
             List<String> tools,
-            String model
+            String model,
+            List<String> skills
     ) {}
 }

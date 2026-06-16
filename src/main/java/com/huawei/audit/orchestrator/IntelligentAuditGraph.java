@@ -109,7 +109,7 @@ public class IntelligentAuditGraph {
                 state.candidates(),
                 dependencies
         );
-        Map<String, String> instructionPaths = subagentDefinitions.materialize(
+        Map<String, String> skillNames = subagentDefinitions.materialize(
                 context.job().workDir(),
                 preparation.expandedCandidates(),
                 preparation.manifest()
@@ -117,7 +117,7 @@ public class IntelligentAuditGraph {
         return Map.of(
                 "candidates", preparation.expandedCandidates(),
                 "evidence_manifest", preparation.manifest(),
-                "instruction_manifest", instructionPaths,
+                "skill_manifest", skillNames,
                 "analysis_summary", preparation.analysisSummary()
         );
     }
@@ -131,7 +131,7 @@ public class IntelligentAuditGraph {
                 context.techProfile(),
                 state.candidates(),
                 state.evidenceManifest(),
-                state.instructionManifest(),
+                state.skillManifest(),
                 state.analysisSummary()
         );
         return Map.of(

@@ -7,8 +7,9 @@ import java.util.Map;
 
 public interface SubagentDefinitionService {
     /**
-     * Creates instruction files for each hunter and returns a map of
-     * base-category to absolute instruction file path.
+     * Materializes one Claude Skill per hunter category under
+     * {@code workDirectory/.claude/skills/} and returns a map of base-category
+     * to skill name (e.g. {@code sql_injection -> audit-sql-injection}).
      */
     Map<String, String> materialize(Path workDirectory, List<String> hunters, Map<String, String> taskManifest)
             throws IOException;

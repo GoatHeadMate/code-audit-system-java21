@@ -29,8 +29,8 @@ public final class OrchestratorAgentState extends AgentState {
     }
 
     @SuppressWarnings("unchecked")
-    public Map<String, String> instructionManifest() {
-        return value("instruction_manifest", Map.of());
+    public Map<String, String> skillManifest() {
+        return value("skill_manifest", Map.of());
     }
 
     @SuppressWarnings("unchecked")

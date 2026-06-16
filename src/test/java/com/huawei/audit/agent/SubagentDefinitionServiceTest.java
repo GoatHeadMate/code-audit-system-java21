@@ -16,22 +16,22 @@ class SubagentDefinitionServiceTest {
     Path tempDir;
 
     @Test
-    void materializesInstructionFiles() throws Exception {
+    void materializesSkillFiles() throws Exception {
         Map<String, String> result = new SubagentDefinitionServiceImpl().materialize(
                 tempDir,
                 List.of("sql_injection"),
                 Map.of("sql_injection", "/path/to/task.json")
         );
 
-        Path instruction = tempDir.resolve("instructions/audit-sql-injection.md");
-        assertThat(instruction).isRegularFile();
-        assertThat(Files.readString(instruction))
-                .contains("sql_injection")
-                .contains("Execution Contract")
-                .contains("Category-Specific Judgment Rules")
+        Path skill = tempDir.resolve(".claude/skills/audit-sql-injection/SKILL.md");
+        assertThat(skill).isRegularFile();
+        assertThat(Files.readString(skill))
+                .contains("name: audit-sql-injection")
+                .contains("description:")
+                .contains("White-Box Judgment Rules")
                 .contains("# SQL 注入判断知识");
-        assertThat(result).containsKey("sql_injection");
-        assertThat(result.get("sql_injection")).contains("audit-sql-injection.md");
+        assertThat(result).containsEntry("sql_injection", "audit-sql-injection");
         assertThat(tempDir.resolve(".claude/agents")).doesNotExist();
+        assertThat(tempDir.resolve("instructions")).doesNotExist();
     }
 }

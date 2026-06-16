@@ -24,6 +24,7 @@ class AgentDef(BaseModel):
     prompt: str
     tools: list[str] = Field(default_factory=lambda: ["Read", "Glob", "Grep"])
     model: str | None = None
+    skills: list[str] | None = None
 
 
 class SuperviseRequest(BaseModel):

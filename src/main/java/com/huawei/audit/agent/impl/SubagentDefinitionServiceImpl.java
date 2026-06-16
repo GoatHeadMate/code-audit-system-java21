@@ -19,14 +19,14 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
     public Map<String, String> materialize(
             Path workDirectory, List<String> hunters, Map<String, String> taskManifest
     ) throws IOException {
-        Path instructionsDir = workDirectory.resolve("instructions");
-        Files.createDirectories(instructionsDir);
+        Path skillsDir = workDirectory.resolve(".claude").resolve("skills");
+        Files.createDirectories(skillsDir);
 
-        Map<String, String> instructionPaths = new LinkedHashMap<>();
+        Map<String, String> skillNames = new LinkedHashMap<>();
 
         for (String hunter : hunters) {
             String baseHunter = baseHunterName(hunter);
-            if (instructionPaths.containsKey(baseHunter)) {
+            if (skillNames.containsKey(baseHunter)) {
                 continue;
             }
             String baseDashed = baseHunter.replace('_', '-');
@@ -35,12 +35,17 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                 continue;
             }
             String specialistKnowledge = Files.readString(sourcePrompt);
-            Path instructionFile = instructionsDir.resolve("audit-" + baseDashed + ".md");
-            Files.writeString(instructionFile, buildInstruction(baseHunter, specialistKnowledge));
-            instructionPaths.put(baseHunter, absolute(instructionFile));
+            String skillName = "audit-" + baseDashed;
+            Path skillDir = skillsDir.resolve(skillName);
+            Files.createDirectories(skillDir);
+            Files.writeString(
+                    skillDir.resolve("SKILL.md"),
+                    buildSkill(skillName, baseHunter, specialistKnowledge)
+            );
+            skillNames.put(baseHunter, skillName);
         }
 
-        return Map.copyOf(instructionPaths);
+        return Map.copyOf(skillNames);
     }
 
     static String baseHunterName(String hunter) {
@@ -48,59 +53,32 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
         return batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
     }
 
-    private String buildInstruction(String hunter, String specialistKnowledge) {
+    private String buildSkill(
+            String skillName, String hunter, String specialistKnowledge
+    ) {
         return """
-                # White-Box Audit Instruction: %s
+                ---
+                name: %s
+                description: White-box %s judgment rules — severity thresholds, \
+                confidence, sanitizer and downgrade conditions. Load when reviewing \
+                %s candidate paths before issuing a verdict.
+                ---
 
-                You are a white-box code audit subagent for the `%s` category.
+                # White-Box Judgment Rules: %s
 
-                ## Execution Contract
-
-                1. Read the TASK FILE whose path will be given to you in the prompt.
-                2. Open and review EVERY candidate-path chunk and stored-candidate chunk.
-                   For authorization tasks, also review EVERY endpoint in
-                   `authorization_surface`, including endpoints with no candidate path.
-                3. Java has already discovered entrypoints, methods, call edges and
-                   dangerous sinks. Do not repeat an unbounded repository-wide scan.
-                4. For each candidate, validate the proposed entrypoint-to-sink path
-                   against source code. Follow only the files and unresolved edges needed
-                   to reach a verdict.
-                5. Determine whether request-controlled data actually reaches the sink,
-                   including stored or asynchronous second-order flows.
-                6. A stored candidate contains an HTTP write path and a later execution
-                   path joined by a storage key. Confirm the exact entity field, database
-                   column, mapper property, Redis key or equivalent mapping.
-                7. Use Glob/Grep/Read to resolve ambiguous dispatch, inherited handlers,
-                   framework filters, sanitizers and missing source slices.
-                8. Never execute shell commands or create files.
-                9. Do not delegate to another agent.
-                10. Validate every reported path against source code and suppress false
-                    positives.
-
-                ## Output Format
-
-                Return exactly one JSON object with two keys:
-                - "chunks_reviewed" (integer)
-                - "findings" (array of finding objects)
-
-                Each finding must contain: rule_id, title, severity, confidence,
-                file_path, start_line, message, evidence, vuln_type, http_method,
-                http_path, entrypoint, reachability, discovery_source, data_flow_path.
-
-                Return {"chunks_reviewed": 0, "findings": []} when no issue is confirmed.
-                Do not use Markdown fences or explanatory text around the JSON.
-
-                ## Category-Specific Judgment Rules
+                Apply these category-specific rules to every candidate-path chunk and
+                stored-candidate chunk listed in your task file. Java has already done
+                broad entrypoint, call-edge and sink discovery; your role is the
+                semantic verdict on controllability, sanitizers, dispatch,
+                authentication, authorization, exploit conditions and false positives.
 
                 %s
                 """.formatted(
+                skillName,
                 hunter.replace('_', ' '),
-                hunter,
+                hunter.replace('_', ' '),
+                hunter.replace('_', ' '),
                 specialistKnowledge.strip()
         );
-    }
-
-    private String absolute(Path path) {
-        return path.toAbsolutePath().normalize().toString();
     }
 }

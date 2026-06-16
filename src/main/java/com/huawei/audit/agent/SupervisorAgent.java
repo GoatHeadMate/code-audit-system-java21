@@ -60,11 +60,11 @@ public class SupervisorAgent {
             Map<String, Object> techProfile,
             List<String> candidates,
             Map<String, String> evidenceManifest,
-            Map<String, String> instructionManifest,
+            Map<String, String> skillManifest,
             Map<String, Object> analysisSummary
     ) throws Exception {
         Map<String, ClaudeGateway.AgentDef> agents = buildAgentDefs(
-                sourceRoot, candidates, evidenceManifest, instructionManifest
+                sourceRoot, candidates, evidenceManifest, skillManifest
         );
         logs.publish(
                 job,
@@ -125,7 +125,7 @@ public class SupervisorAgent {
             Path sourceRoot,
             List<String> candidates,
             Map<String, String> evidenceManifest,
-            Map<String, String> instructionManifest
+            Map<String, String> skillManifest
     ) {
         Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
@@ -136,21 +136,25 @@ public class SupervisorAgent {
                 continue;
             }
             String baseHunter = baseHunterName(hunter);
-            String instructionPath = instructionManifest.getOrDefault(
-                    baseHunter, ""
-            );
+            String skillName = skillManifest.get(baseHunter);
+            List<String> skills = skillName == null
+                    ? List.of()
+                    : List.of(skillName);
+            String skillRef = skillName == null ? "(none)" : skillName;
             String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
                     hunter,
-                    instructionPath,
+                    skillRef,
                     taskPath,
-                    sourceRootStr
+                    sourceRootStr,
+                    skillRef
             );
             agents.put(hunter, new ClaudeGateway.AgentDef(
                     "Audit " + hunter.replace('_', ' ')
                             + " vulnerabilities in the target project",
                     agentPrompt,
                     readOnlyTools,
-                    null
+                    null,
+                    skills
             ));
         }
         return agents;
@@ -180,7 +184,7 @@ public class SupervisorAgent {
                 All hunter subagents are pre-registered by name. To invoke one,
                 use the Agent tool with subagent_type set to the hunter name.
                 Example: Agent(subagent_type: "code_execution", prompt: "Begin audit")
-                Each agent already has its instruction file, task file and source
+                Each agent already has its judgment-rules skill, task file and source
                 root embedded in its definition. You only need to tell it to start.
                 ════════════════════════════════════════════════════════════════
 
@@ -276,8 +280,8 @@ public class SupervisorAgent {
                 DELEGATION INSTRUCTIONS:
                 Invoke each pre-defined agent by name. Example:
                   Agent(subagent_type: "code_execution", prompt: "Begin audit")
-                All agent definitions already contain instruction files, task files,
-                and source root. You do not need to pass file paths in the prompt.
+                All agent definitions already contain their judgment-rules skill,
+                task file, and source root. You do not need to pass file paths in the prompt.
 
                 Select the specialists appropriate for this project. When intelligent
                 selection is disabled, delegate all available agents.
@@ -297,8 +301,9 @@ public class SupervisorAgent {
     private static final String SUBAGENT_PROMPT_TEMPLATE = """
             You are a white-box code audit subagent for the `%s` category.
 
-            Your instruction file (category rules and specialist knowledge):
-            %s
+            Your category judgment rules are provided as a Skill named `%s`
+            (severity thresholds, confidence, sanitizer and downgrade conditions).
+            Invoke that skill with the Skill tool FIRST, before reviewing candidates.
 
             Your task file (candidate paths to review):
             %s
@@ -307,13 +312,18 @@ public class SupervisorAgent {
             %s
 
             Execution steps:
-            1. Read the instruction file FIRST to learn your audit rules.
+            1. Invoke your `%s` skill to load category-specific judgment rules.
             2. Read the task file to get all candidate-path chunks.
-            3. Review EVERY candidate-path chunk and stored-candidate chunk.
+            3. Review EVERY candidate-path chunk and stored-candidate chunk. For
+               authorization, also review every endpoint in `authorization_surface`.
             4. For each candidate, validate the entrypoint-to-sink path against source code.
             5. Use Read/Glob/Grep to resolve ambiguous dispatch and missing source slices.
-            6. Return a single JSON object: {"chunks_reviewed": N, "findings": [...]}
-            7. No markdown fences, no explanatory text around the JSON.
+            6. Never execute shell commands, create files, or delegate to another agent.
+            7. Return a single JSON object: {"chunks_reviewed": N, "findings": [...]}.
+               Each finding must contain: rule_id, title, severity, confidence,
+               file_path, start_line, message, evidence, vuln_type, http_method,
+               http_path, entrypoint, reachability, discovery_source, data_flow_path.
+            8. No markdown fences, no explanatory text around the JSON.
             """;
 
     private SupervisorEnvelope parseEnvelope(

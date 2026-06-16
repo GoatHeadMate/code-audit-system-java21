@@ -36,8 +36,8 @@ class IntelligentAuditGraphTest {
                 )
         );
         when(definitions.materialize(any(), any(), any())).thenReturn(
-                Map.of("sql_injection", "/instructions/audit-sql-injection.md",
-                       "ssrf", "/instructions/audit-ssrf.md")
+                Map.of("sql_injection", "audit-sql-injection",
+                       "ssrf", "audit-ssrf")
         );
         when(supervisor.run(any(), any(), any(), any(), any(), any(), any())).thenReturn(
                 new SupervisorAgent.SupervisorResult(
