@@ -169,10 +169,9 @@ public class IntelligentAuditGraph {
                 "supervisor_rationale",
                 state.value("supervisor_rationale", "")
         );
-        summary.put("claude_code_processes", 1);
-        summary.put("subagent_mode", "native-claude-code-agent-tool");
+        summary.put("claude_agent_sessions", 1);
+        summary.put("subagent_mode", "native-claude-agent-sdk-subagents");
         summary.put("scan_strategy", "candidate-path-whitebox");
-        summary.put("codeql_used", false);
         summary.put("analysis_coverage", state.analysisSummary());
         return Map.of(
                 "final_findings", finalFindings,

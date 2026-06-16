@@ -2,12 +2,15 @@ package com.huawei.audit.agent.impl;
 
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CandidatePath;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Coverage;
+import com.huawei.audit.analysis.WhiteBoxAnalysisService.EntryPoint;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StoredCandidate;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 final class EvidencePackagePolicy {
     private static final Map<String, Set<String>> HUNTER_SINKS = Map.ofEntries(
@@ -87,6 +90,66 @@ final class EvidencePackagePolicy {
                         c -> c.executionPath().callDepth()
                 ))
                 .toList();
+    }
+
+    static List<Map<String, Object>> authorizationSurface(
+            List<EntryPoint> entryPoints,
+            List<CandidatePath> candidates
+    ) {
+        Map<String, List<CandidatePath>> candidatesByEntry = candidates.stream()
+                .filter(candidate -> candidate.entryPoint() != null)
+                .collect(Collectors.groupingBy(
+                        candidate -> candidate.entryPoint().id()
+                ));
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (EntryPoint entryPoint : entryPoints) {
+            if (!isAuthorizationProtocol(entryPoint.protocol())) {
+                continue;
+            }
+            List<CandidatePath> reachable = candidatesByEntry.getOrDefault(
+                    entryPoint.id(),
+                    List.of()
+            );
+            List<String> sinkCategories = reachable.stream()
+                    .map(candidate -> candidate.sink().category())
+                    .distinct()
+                    .sorted()
+                    .toList();
+            int minimumCallDepth = reachable.stream()
+                    .mapToInt(CandidatePath::callDepth)
+                    .min()
+                    .orElse(-1);
+
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("entrypoint_id", entryPoint.id());
+            summary.put("protocol", entryPoint.protocol());
+            summary.put("http_methods", entryPoint.httpMethods());
+            summary.put("path", entryPoint.path());
+            summary.put("class_name", entryPoint.className());
+            summary.put("method_name", entryPoint.methodName());
+            summary.put("file_path", entryPoint.filePath());
+            summary.put("start_line", entryPoint.startLine());
+            summary.put("framework", entryPoint.framework());
+            summary.put(
+                    "security_annotations",
+                    entryPoint.securityAnnotations()
+            );
+            summary.put(
+                    "method_security_present",
+                    !entryPoint.securityAnnotations().isEmpty()
+            );
+            summary.put("binding_status", entryPoint.bindingStatus());
+            summary.put("reachable_sink_categories", sinkCategories);
+            summary.put("candidate_path_count", reachable.size());
+            summary.put("minimum_call_depth", minimumCallDepth);
+            result.add(Map.copyOf(summary));
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean isAuthorizationProtocol(String protocol) {
+        return "HTTP".equalsIgnoreCase(protocol)
+                || "WEBSOCKET".equalsIgnoreCase(protocol);
     }
 
     private static Comparator<CandidatePath> candidatePriority() {

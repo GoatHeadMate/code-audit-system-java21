@@ -58,6 +58,8 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
 
                 1. Read the TASK FILE whose path will be given to you in the prompt.
                 2. Open and review EVERY candidate-path chunk and stored-candidate chunk.
+                   For authorization tasks, also review EVERY endpoint in
+                   `authorization_surface`, including endpoints with no candidate path.
                 3. Java has already discovered entrypoints, methods, call edges and
                    dangerous sinks. Do not repeat an unbounded repository-wide scan.
                 4. For each candidate, validate the proposed entrypoint-to-sink path
@@ -70,7 +72,7 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                    column, mapper property, Redis key or equivalent mapping.
                 7. Use Glob/Grep/Read to resolve ambiguous dispatch, inherited handlers,
                    framework filters, sanitizers and missing source slices.
-                8. Never execute CodeQL, shell commands, or create files.
+                8. Never execute shell commands or create files.
                 9. Do not delegate to another agent.
                 10. Validate every reported path against source code and suppress false
                     positives.

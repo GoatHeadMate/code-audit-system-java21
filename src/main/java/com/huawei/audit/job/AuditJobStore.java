@@ -119,6 +119,7 @@ public class AuditJobStore {
         }
 
         AuditJob job = new AuditJob(jobId, lang, createdAt);
+        job.submitOnce(java.util.Set.of());
         job.sourceType(sourceType);
         job.gitUrl(gitUrl);
         job.workDir(dir);

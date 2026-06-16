@@ -16,15 +16,13 @@ server:
 
 audit:
   workspace: ${AUDIT_WORKSPACE:workspace}
-  codeql-bin: ${CODEQL_BIN:codeql}
-  claude-bin: ${CLAUDE_BIN:claude}
+  claude-sidecar-url: ${CLAUDE_SIDECAR_URL:http://127.0.0.1:8011}
+  claude-sidecar-token: ${CLAUDE_SIDECAR_TOKEN:}
+  claude-sidecar-timeout: ${CLAUDE_SIDECAR_TIMEOUT:30m}
   max-concurrent-jobs: ${MAX_CONCURRENT_JOBS:2}
-  # Limits concurrent evidence preparation tasks; Claude uses one Supervisor process.
+  # Limits concurrent evidence preparation tasks; Claude uses one Supervisor session.
   max-concurrent-hunters: ${MAX_CONCURRENT_HUNTERS:15}
   hunter-timeout: ${HUNTER_TIMEOUT:30m}
-  query-lock-timeout: ${CODEQL_QUERY_LOCK_TIMEOUT:30m}
-  codeql-parallelism: ${CODEQL_PARALLELISM:4}
-  codeql-ram-mb: ${CODEQL_RAM_MB:2048}
   orchestrator:
     enabled: ${INTELLIGENT_ORCHESTRATOR_ENABLED:true}
     max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}

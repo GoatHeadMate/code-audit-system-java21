@@ -7,27 +7,28 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "audit")
 public record AuditProperties(
         Path workspace,
-        String codeqlBin,
-        String claudeBin,
+        String claudeSidecarUrl,
+        String claudeSidecarToken,
+        Duration claudeSidecarTimeout,
         int maxConcurrentJobs,
         int maxConcurrentHunters,
-        Duration hunterTimeout,
-        Duration queryLockTimeout,
-        int codeqlParallelism,
-        int codeqlRamMb
+        Duration hunterTimeout
 ) {
     public AuditProperties {
         workspace = workspace == null ? Path.of("workspace") : workspace;
-        codeqlBin = blankDefault(codeqlBin, "codeql");
-        claudeBin = blankDefault(claudeBin, "claude");
+        claudeSidecarUrl = blankDefault(
+                claudeSidecarUrl,
+                "http://127.0.0.1:8011"
+        );
+        claudeSidecarToken = claudeSidecarToken == null
+                ? ""
+                : claudeSidecarToken.strip();
+        claudeSidecarTimeout = claudeSidecarTimeout == null
+                ? Duration.ofMinutes(30)
+                : claudeSidecarTimeout;
         maxConcurrentJobs = clamp(maxConcurrentJobs, 1, 32, 2);
         maxConcurrentHunters = clamp(maxConcurrentHunters, 1, 15, 15);
         hunterTimeout = hunterTimeout == null ? Duration.ofMinutes(30) : hunterTimeout;
-        queryLockTimeout = queryLockTimeout == null
-                ? Duration.ofMinutes(30)
-                : queryLockTimeout;
-        codeqlParallelism = clamp(codeqlParallelism, 1, 32, 4);
-        codeqlRamMb = clamp(codeqlRamMb, 2048, 16384, 2048);
     }
 
     public Path absoluteWorkspace() {

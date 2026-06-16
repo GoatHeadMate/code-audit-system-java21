@@ -10,8 +10,17 @@ public interface WhiteBoxAnalysisService {
     AnalysisResult analyze(
             Path sourceRoot,
             List<Map<String, String>> dependencies,
-            ClaudeGateway claudeGateway
+            ClaudeGateway claudeGateway,
+            Set<String> selectedInterfaceIds
     ) throws Exception;
+
+    default AnalysisResult analyze(
+            Path sourceRoot,
+            List<Map<String, String>> dependencies,
+            ClaudeGateway claudeGateway
+    ) throws Exception {
+        return analyze(sourceRoot, dependencies, claudeGateway, Set.of());
+    }
 
     record EntryPoint(
             String id,
@@ -79,6 +88,7 @@ public interface WhiteBoxAnalysisService {
             String methodId,
             String className,
             String methodName,
+            int parameterCount,
             String filePath,
             int startLine,
             int endLine,

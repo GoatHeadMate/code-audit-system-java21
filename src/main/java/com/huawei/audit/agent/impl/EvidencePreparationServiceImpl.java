@@ -178,31 +178,38 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<String> expandedCandidates, AuditJob job
     ) throws Exception {
         int totalChunks = candChunks.size() + storedChunks.size();
-        int batchCount = (totalChunks + maxChunks - 1) / maxChunks;
-        int candPerBatch = (candChunks.size() + batchCount - 1) / batchCount;
-        int storedPerBatch = (storedChunks.size() + batchCount - 1) / batchCount;
+        List<EvidenceBatchPlanner.ChunkBatch> batches =
+                EvidenceBatchPlanner.partitionChunks(
+                        candChunks, storedChunks, maxChunks);
+        int batchCount = batches.size();
         logs.publish(job, "[whitebox] splitting " + hunter + " into " + batchCount
                 + " batches (total_chunks=" + totalChunks + ", max=" + maxChunks + ")");
+        int candidateOffset = 0;
+        int storedOffset = 0;
         for (int b = 0; b < batchCount; b++) {
             String batchName = hunter + "_batch_" + (b + 1);
-            List<String> bc = sliceChunks(candChunks, b, candPerBatch);
-            List<String> bs = sliceChunks(storedChunks, b, storedPerBatch);
-            int bcCount = candChunks.isEmpty() ? 0
-                    : (int) Math.ceil((double) totalCandidates * bc.size() / candChunks.size());
-            int bsCount = storedChunks.isEmpty() ? 0
-                    : (int) Math.ceil((double) totalStored * bs.size() / storedChunks.size());
+            EvidenceBatchPlanner.ChunkBatch batch = batches.get(b);
+            List<String> bc = batch.candidateChunks();
+            List<String> bs = batch.storedChunks();
+            int bcCount = EvidenceBatchPlanner.proportionalItemCount(
+                    totalCandidates,
+                    candChunks.size(),
+                    candidateOffset,
+                    bc.size()
+            );
+            int bsCount = EvidenceBatchPlanner.proportionalItemCount(
+                    totalStored,
+                    storedChunks.size(),
+                    storedOffset,
+                    bs.size()
+            );
+            candidateOffset += bc.size();
+            storedOffset += bs.size();
             Path batchFile = hunterDir.resolve("task-batch-" + (b + 1) + ".json");
             writeTaskFile(batchFile, hunter, sourceRoot, indexFile, bcCount, bc, bsCount, bs, analysis);
             manifest.put(batchName, absolute(batchFile));
             expandedCandidates.add(batchName);
         }
-    }
-
-    private List<String> sliceChunks(List<String> chunks, int batch, int perBatch) {
-        if (perBatch == 0 || chunks.isEmpty()) return List.of();
-        int start = batch * perBatch;
-        if (start >= chunks.size()) return List.of();
-        return chunks.subList(start, Math.min(start + perBatch, chunks.size()));
     }
 
     private void writeTaskFile(
@@ -221,6 +228,11 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         task.put("candidate_chunks", candidateChunks);
         task.put("stored_candidate_count", storedCount);
         task.put("stored_candidate_chunks", storedChunks);
+        if ("authorization".equals(hunter)) {
+            task.put("authorization_surface",
+                    EvidencePackagePolicy.authorizationSurface(
+                            analysis.entryPoints(), analysis.candidatePaths()));
+        }
         task.put("unresolved_entrypoints", analysis.entryPoints().stream()
                 .filter(entry -> "UNRESOLVED".equals(entry.bindingStatus())).toList());
         task.put("review_contract", REVIEW_CONTRACT);
@@ -238,10 +250,9 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         }
         try {
             logs.publish(job, "[whitebox] indexing source in bounded batches");
-            return analysisService.analyze(
-                    sourceRoot,
-                    dependencies,
-                    claudeGateway
+            return analysisService.analyze(sourceRoot, dependencies,
+                    claudeGateway,
+                    job.selectedInterfaceIds()
             );
         } finally {
             analysisSlot.release();

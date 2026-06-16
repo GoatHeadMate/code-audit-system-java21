@@ -23,7 +23,6 @@ public class ProcessRunner {
         this.executor = executor;
     }
 
-    /** System processes (CodeQL, etc.) — use the platform default charset. */
     public ProcessResult run(
             List<String> command,
             Path workingDirectory,
@@ -35,7 +34,6 @@ public class ProcessRunner {
                 null, Charset.defaultCharset(), outputConsumer);
     }
 
-    /** Processes that receive stdin and produce UTF-8 output (Claude Code). */
     public ProcessResult run(
             List<String> command,
             Path workingDirectory,

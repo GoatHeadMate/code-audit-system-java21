@@ -78,6 +78,68 @@ class CallGraphBuilderTest {
                 .containsExactly("unknown.get(arg)");
     }
 
+    @Test
+    void preservesUniqueMethodFallbackWhenFieldTypeIsUnknown() {
+        MethodNode caller = method(
+                "Caller#read/0",
+                "Caller",
+                "read",
+                0,
+                List.of(call("load", "repository", "", 1))
+        );
+        MethodNode target = method(
+                "RuleRepository#load/1",
+                "RuleRepository",
+                "load",
+                1,
+                List.of()
+        );
+        SourceIndex index = SourceIndex.create(
+                List.of(caller, target),
+                List.of(),
+                Map.of(),
+                List.of()
+        );
+
+        CallGraph graph = new CallGraphBuilder().build(index);
+
+        assertThat(graph.outgoing().get(caller.id()))
+                .singleElement()
+                .satisfies(edge -> {
+                    assertThat(edge.toMethodId()).isEqualTo(target.id());
+                    assertThat(edge.resolution())
+                            .isEqualTo("unique-method-name-untyped");
+                });
+    }
+
+    @Test
+    void rejectsUniqueMethodFallbackForKnownExternalReceiver() {
+        MethodNode caller = method(
+                "Caller#push/0",
+                "Caller",
+                "push",
+                0,
+                List.of(call("push", "queue", "LinkedList", 1))
+        );
+        MethodNode unrelated = method(
+                "PushEventManager#push/1",
+                "PushEventManager",
+                "push",
+                1,
+                List.of()
+        );
+        SourceIndex index = SourceIndex.create(
+                List.of(caller, unrelated),
+                List.of(),
+                Map.of(),
+                List.of()
+        );
+
+        CallGraph graph = new CallGraphBuilder().build(index);
+
+        assertThat(graph.outgoing().get(caller.id())).isEmpty();
+    }
+
     private MethodNode method(
             String id,
             String className,

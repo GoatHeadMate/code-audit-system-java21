@@ -9,6 +9,33 @@ public final class ApiDtos {
 
     public record SubmitResponse(String jobId, String status, String message) { }
 
+    public record InterfacePreviewResponse(
+            String jobId,
+            String status,
+            List<InterfaceOption> interfaces
+    ) { }
+
+    public record InterfaceOption(
+            String id,
+            String protocol,
+            List<String> operations,
+            String route,
+            String className,
+            String methodName,
+            String filePath,
+            int startLine,
+            String framework,
+            List<String> securityAnnotations
+    ) { }
+
+    public record StartAuditRequest(List<String> interfaceIds) {
+        public StartAuditRequest {
+            interfaceIds = interfaceIds == null
+                    ? List.of()
+                    : List.copyOf(interfaceIds);
+        }
+    }
+
     public record JobStatusResponse(
             String jobId,
             String status,

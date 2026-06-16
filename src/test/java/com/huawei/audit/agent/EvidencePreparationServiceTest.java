@@ -21,8 +21,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 class EvidencePreparationServiceTest {
     private static final AuditProperties TEST_PROPERTIES = new AuditProperties(
-            Path.of("workspace"), "codeql", "claude", 2, 15,
-            Duration.ofMinutes(30), Duration.ofMinutes(30), 4, 2048
+            Path.of("workspace"),
+            "http://127.0.0.1:8011",
+            "",
+            Duration.ofMinutes(30),
+            2,
+            15,
+            Duration.ofMinutes(30)
     );
     private static final OrchestratorProperties TEST_ORCH_PROPERTIES =
             new OrchestratorProperties(true, 10, 5, 80);
@@ -53,7 +58,6 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null,
                 null
         );
         AuditJob job = new AuditJob("evidence1", "java");
@@ -63,7 +67,7 @@ class EvidencePreparationServiceTest {
         var result = service.prepare(
                 job,
                 source,
-                List.of("code_execution"),
+                List.of("code_execution", "authorization"),
                 List.of()
         );
 
@@ -78,6 +82,24 @@ class EvidencePreparationServiceTest {
                 .containsEntry("discovered_entrypoints", 1L)
                 .containsEntry("bound_entrypoints", 1L)
                 .containsEntry("entrypoints_reaching_sink", 1L);
+
+        Path authorizationTask = Path.of(
+                result.manifest().get("authorization")
+        );
+        var authorizationJson = new ObjectMapper().readTree(
+                authorizationTask.toFile()
+        );
+        assertThat(authorizationJson.path("authorization_surface"))
+                .singleElement()
+                .satisfies(endpoint -> {
+                    assertThat(endpoint.path("path").asText())
+                            .isEqualTo("/run");
+                    assertThat(endpoint.path("method_security_present").asBoolean())
+                            .isFalse();
+                    assertThat(endpoint.path("reachable_sink_categories"))
+                            .extracting(node -> node.asText())
+                            .contains("COMMAND_EXECUTION");
+                });
     }
 
     @Test
@@ -128,7 +150,6 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null,
                 null
         );
         AuditJob job = new AuditJob("stored1", "java");
@@ -180,7 +201,6 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null,
                 null
         );
         AuditJob job = new AuditJob("large1", "java");

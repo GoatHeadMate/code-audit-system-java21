@@ -192,8 +192,8 @@ public class SupervisorAgent {
 
                 Rules:
                 1. Delegate each selected category to its matching pre-defined agent.
-                2. Launch independent agents in parallel in a single delegation wave
-                   whenever possible.
+                2. Launch independent agents in parallel waves, never exceeding the
+                   maximum parallel agents stated in the user prompt.
                 3. Code execution, authorization, unsafe parsing, file operations, SSRF
                    and component vulnerabilities are mandatory when available.
                    When a category is split into batch agents (e.g., code_execution_batch_1,
@@ -237,19 +237,24 @@ public class SupervisorAgent {
             Map<String, Object> analysisSummary
     ) throws Exception {
         boolean hasBatches = candidates.stream().anyMatch(c -> c.contains("_batch_"));
-        int maxHunters = hasBatches || !properties.enabled()
+        int totalHunters = hasBatches || !properties.enabled()
                 ? candidates.size()
                 : Math.min(
                         candidates.size(),
                         properties.maxPrimaryHunters()
                                 + properties.maxAdditionalHunters()
                 );
+        int maxParallelHunters = Math.min(
+                candidates.size(),
+                properties.maxPrimaryHunters()
+                        + properties.maxAdditionalHunters()
+        );
         String batchNote = hasBatches
                 ? """
 
                 BATCH AGENTS: Some categories have been split into parallel batches.
                 You MUST delegate ALL batch agents for each category.
-                Launch all batches for the same category in a single parallel wave.
+                Use as many waves as needed and never exceed the parallel-wave limit.
                 """
                 : "";
         return """
@@ -261,7 +266,8 @@ public class SupervisorAgent {
                 Pre-defined hunter agents (invoke by name via Agent tool):
                 %s
 
-                Maximum delegated Hunters: %d
+                Total Hunters to delegate: %d
+                Maximum parallel agents per wave: %d
                 Intelligent selection enabled: %s
                 %s
                 White-box analysis summary (for cross-API chain reasoning):
@@ -279,7 +285,8 @@ public class SupervisorAgent {
                 sourceRoot.toAbsolutePath().normalize(),
                 objectMapper.writeValueAsString(techProfile),
                 objectMapper.writeValueAsString(candidates),
-                maxHunters,
+                totalHunters,
+                maxParallelHunters,
                 properties.enabled(),
                 batchNote,
                 objectMapper.writerWithDefaultPrettyPrinter()

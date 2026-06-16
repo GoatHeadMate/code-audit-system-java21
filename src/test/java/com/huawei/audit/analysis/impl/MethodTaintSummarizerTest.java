@@ -79,6 +79,37 @@ class MethodTaintSummarizerTest {
     }
 
     @Test
+    void propagatesTaintOnlyToTheArgumentThatReferencesIt() {
+        MethodNode method = new MethodNode(
+                "Foo#call/2@file:1:1",
+                "Foo",
+                "call",
+                2,
+                List.of("clean", "tainted"),
+                "file.java",
+                1, 10,
+                "void call(String clean, String tainted) { send(clean, tainted); }",
+                List.of(new CallSite(
+                        "send", "", "", 2,
+                        List.of("String", "String"),
+                        List.of("clean", "tainted"),
+                        5,
+                        "send(clean, tainted)"
+                )),
+                Map.of("clean", "String", "tainted", "String"),
+                List.of(),
+                List.of()
+        );
+
+        TaintSummary summary = summarizer.summarize(method);
+
+        assertThat(summary.parameterFlows())
+                .filteredOn(flow -> flow.sourceParamIndex() == 1)
+                .extracting(flow -> flow.targetArgIndex())
+                .containsExactly(1);
+    }
+
+    @Test
     void emptyMethodHasNoTaint() {
         MethodNode method = new MethodNode(
                 "Empty#noop/0@file:1:1",

@@ -3,20 +3,27 @@ package com.huawei.audit.analysis.impl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.audit.agent.ClaudeGateway;
 import com.huawei.audit.analysis.impl.DangerousSinkClassifier.ExtraSinkRule;
-import com.huawei.audit.process.ProcessRunner;
-import com.huawei.audit.process.ProcessResult;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 final class LlmSinkExpander {
+    private static final Logger log = LoggerFactory.getLogger(
+            LlmSinkExpander.class
+    );
+    private static final int MAX_DEPENDENCIES = 200;
+    private static final int MAX_RULES = 200;
     private static final List<String> KNOWN_CATEGORIES = List.of(
             "COMMAND_EXECUTION", "SCRIPT_OR_EXPRESSION_EXECUTION",
             "NATIVE_DESERIALIZATION", "DYNAMIC_LOADING", "SQL_EXECUTION",
@@ -33,41 +40,75 @@ final class LlmSinkExpander {
 
     List<ExtraSinkRule> expand(
             List<Map<String, String>> dependencies,
-            ProcessRunner processRunner,
-            String claudeBin,
+            ClaudeGateway claudeGateway,
             Path workingDirectory
     ) {
         if (dependencies == null || dependencies.isEmpty()
-                || processRunner == null || claudeBin == null) {
+                || claudeGateway == null) {
             return List.of();
         }
         try {
-            String depText = dependencies.stream()
-                    .map(dep -> dep.getOrDefault("groupId", "")
-                            + ":" + dep.getOrDefault("artifactId", ""))
-                    .filter(s -> !s.equals(":"))
-                    .distinct()
-                    .limit(200)
+            String depText = dependencyCoordinates(dependencies).stream()
                     .collect(Collectors.joining("\n"));
             if (depText.isBlank()) {
                 return List.of();
             }
             String categories = String.join(", ", KNOWN_CATEGORIES);
             String prompt = PROMPT_TEMPLATE.formatted(depText, categories);
-            List<String> command = List.of(
-                    claudeBin, "--print", "--output-format", "json", "-p", prompt
+            return parseRules(claudeGateway.query(
+                    workingDirectory,
+                    prompt,
+                    Duration.ofSeconds(60)
+            ));
+        } catch (RuntimeException exception) {
+            log.warn(
+                    "Unable to expand dependency sinks with Claude; "
+                            + "continuing with built-in rules: {}",
+                    exception.getMessage()
             );
-            ProcessResult result = processRunner.run(
-                    command, workingDirectory, Map.of(),
-                    Duration.ofSeconds(60), null, line -> {}
-            );
-            if (result.exitCode() != 0) {
-                return List.of();
-            }
-            return parseRules(String.join("\n", result.output()));
-        } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private List<String> dependencyCoordinates(
+            List<Map<String, String>> dependencies
+    ) {
+        Set<String> coordinates = new LinkedHashSet<>();
+        for (Map<String, String> dependency : dependencies) {
+            if (dependency == null) {
+                continue;
+            }
+            String groupId = firstNonBlank(
+                    dependency.get("group_id"),
+                    dependency.get("groupId")
+            );
+            String artifactId = firstNonBlank(
+                    dependency.get("artifact_id"),
+                    dependency.get("artifactId")
+            );
+            if (groupId.isBlank() || artifactId.isBlank()) {
+                continue;
+            }
+            String version = firstNonBlank(dependency.get("version"));
+            String coordinate = groupId + ":" + artifactId;
+            if (!version.isBlank()) {
+                coordinate += ":" + version;
+            }
+            coordinates.add(coordinate);
+            if (coordinates.size() == MAX_DEPENDENCIES) {
+                break;
+            }
+        }
+        return List.copyOf(coordinates);
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.strip();
+            }
+        }
+        return "";
     }
 
     private List<ExtraSinkRule> parseRules(String rawOutput) {
@@ -79,17 +120,22 @@ final class LlmSinkExpander {
             List<Map<String, String>> items = objectMapper.readValue(
                     jsonArray, new TypeReference<>() {}
             );
-            List<ExtraSinkRule> rules = new ArrayList<>();
+            Set<ExtraSinkRule> rules = new LinkedHashSet<>();
             for (Map<String, String> item : items) {
                 String methodName = item.getOrDefault("methodName", "").strip();
                 String receiverType = item.getOrDefault("receiverType", "").strip()
                         .toLowerCase(Locale.ROOT);
-                String category = item.getOrDefault("category", "").strip();
+                String category = item.getOrDefault("category", "")
+                        .strip()
+                        .toUpperCase(Locale.ROOT);
                 if (methodName.isEmpty() || receiverType.isEmpty()
                         || !KNOWN_CATEGORIES.contains(category)) {
                     continue;
                 }
                 rules.add(new ExtraSinkRule(methodName, receiverType, category));
+                if (rules.size() == MAX_RULES) {
+                    break;
+                }
             }
             return List.copyOf(rules);
         } catch (Exception ignored) {

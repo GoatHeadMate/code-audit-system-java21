@@ -8,6 +8,7 @@ import com.huawei.audit.source.HttpEndpointScanner;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -62,7 +63,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.coverage().discoveredEntryPoints()).isEqualTo(1);
         assertThat(result.coverage().boundEntryPoints()).isEqualTo(1);
@@ -71,6 +72,8 @@ class WhiteBoxAnalysisServiceTest {
                     assertThat(candidate.entryPoint().path()).isEqualTo("/api/run");
                     assertThat(candidate.sink().category())
                             .isEqualTo("COMMAND_EXECUTION");
+                    assertThat(candidate.sourceClassification())
+                            .isEqualTo("REQUEST_CONTROLLED");
                     assertThat(candidate.methodPath())
                             .extracting(step -> step.className() + "." + step.methodName())
                             .containsExactly(
@@ -136,7 +139,7 @@ class WhiteBoxAnalysisServiceTest {
         var result = new WhiteBoxAnalysisServiceImpl(List.of(
                 new HttpEndpointScanner(),
                 new AsyncEntryPointDiscoverer()
-        )).analyze(tempDir, List.of(), null, "claude");
+        )).analyze(tempDir, List.of(), null);
 
         assertThat(result.storageAccesses())
                 .extracting(access ->
@@ -200,7 +203,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new AsyncEntryPointDiscoverer())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.storedCandidates())
                 .singleElement()
@@ -308,7 +311,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .filteredOn(candidate ->
@@ -363,7 +366,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .extracting(candidate -> candidate.sink().category())
@@ -393,7 +396,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .singleElement()
@@ -434,11 +437,84 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .filteredOn(c -> c.sink().category().equals("COMMAND_EXECUTION"))
                 .isNotEmpty();
+    }
+
+    @Test
+    void auditsOnlyTheSelectedHttpInterface() throws Exception {
+        Files.writeString(tempDir.resolve("SelectiveController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class SelectiveController {
+                    @PostMapping("/selected")
+                    void selected(@RequestBody String command) throws Exception {
+                        new ProcessBuilder("/bin/bash", "-c", command).start();
+                    }
+
+                    @PostMapping("/skipped")
+                    void skipped(@RequestBody String command) throws Exception {
+                        new ProcessBuilder("/bin/bash", "-c", command).start();
+                    }
+                }
+                """);
+
+        HttpEndpointScanner scanner = new HttpEndpointScanner();
+        String selectedId = scanner.discover(tempDir).stream()
+                .filter(entryPoint -> "/selected".equals(entryPoint.route()))
+                .map(EntryPointSelector::id)
+                .findFirst()
+                .orElseThrow();
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(scanner)
+        ).analyze(tempDir, List.of(), null, Set.of(selectedId));
+
+        assertThat(result.entryPoints())
+                .filteredOn(entryPoint ->
+                        EntryPointSelector.selectable(entryPoint.protocol()))
+                .extracting(WhiteBoxAnalysisService.EntryPoint::path)
+                .containsExactly("/selected");
+        assertThat(result.candidatePaths())
+                .extracting(candidate -> candidate.entryPoint().path())
+                .containsOnly("/selected");
+    }
+
+    @Test
+    void doesNotClassifyConstantSinkArgumentAsRequestControlled()
+            throws Exception {
+        Files.writeString(tempDir.resolve("ConstantController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class ConstantController {
+                    @PostMapping("/constant")
+                    void run(@RequestBody String ignored) throws Exception {
+                        new Holder(ignored);
+                        new ProcessBuilder("/usr/bin/id").start();
+                    }
+                }
+
+                class Holder {
+                    Holder(String value) {}
+                }
+                """);
+
+        var result = new WhiteBoxAnalysisServiceImpl(
+                List.of(new HttpEndpointScanner())
+        ).analyze(tempDir, List.of(), null);
+
+        assertThat(result.candidatePaths())
+                .filteredOn(candidate -> candidate.entryPoint().path()
+                        .equals("/constant"))
+                .singleElement()
+                .satisfies(candidate -> assertThat(
+                        candidate.sourceClassification()
+                ).isEqualTo("UNKNOWN"));
     }
 
     @Test
@@ -547,7 +623,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .filteredOn(c -> c.entryPoint().path().equals("/task"))
@@ -629,7 +705,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .as("double delegate chain should reach RuntimeExec sink")
@@ -681,7 +757,7 @@ class WhiteBoxAnalysisServiceTest {
 
         var result = new WhiteBoxAnalysisServiceImpl(
                 List.of(new HttpEndpointScanner())
-        ).analyze(tempDir, List.of(), null, "claude");
+        ).analyze(tempDir, List.of(), null);
 
         assertThat(result.candidatePaths())
                 .as("should find path through split() + wrapper exec to Runtime.exec sink")

@@ -1,6 +1,6 @@
 # Code Audit System Java 21
 
-Independent Java 21 refactor of `code-audit-system`.
+Java 21 white-box source audit service for Java applications.
 
 ## Runtime model
 
@@ -8,15 +8,15 @@ Independent Java 21 refactor of `code-audit-system`.
 - Java 21 virtual threads
 - LangChain4j 1.16.1 intelligent Orchestrator
 - LangGraph4j 1.8.17 state graph
-- One Claude Code Supervisor process per audit
-- Native Claude Code Hunter Subagents inside the Supervisor session
+- Python Claude Agent SDK Sidecar
+- One Claude Supervisor session with native Hunter Subagents per audit
 - Pluggable external entrypoint discoverers
 - JDK compiler AST index for methods, calls, interface implementations and sinks
 - Bounded entrypoint-to-sink candidate paths for Claude semantic review
 - Stored-flow candidates joining HTTP writes to asynchronous execution paths
 - Coverage metrics for binding, parser diagnostics and unresolved calls
 - SSE-compatible API and static frontend
-- Claude integration through the local `claude` CLI
+- HTTP/NDJSON integration between Java and the Python Sidecar
 
 ## Candidate-path white-box audit
 
@@ -33,7 +33,7 @@ bounded entrypoint -> sink paths
 LangGraph4j prepare_evidence
             |
             v
-one Claude Code Supervisor process
+Python Claude Agent SDK Sidecar
             |
             +--> native audit-sql-injection Subagent
             +--> native audit-ssrf Subagent
@@ -43,8 +43,8 @@ one Claude Code Supervisor process
 LangGraph4j finalize
 ```
 
-Only the Supervisor starts Claude Code. Specialist Hunters are native Claude
-Code Subagents inside that session. Java owns broad, reproducible discovery:
+The Sidecar starts one Supervisor session. Specialist Hunters are native Claude
+Subagents inside that session. Java owns broad, reproducible discovery:
 entrypoints, method indexing, approximate dispatch, interface implementations,
 dangerous sinks and candidate paths. Each Hunter receives only bounded paths
 for its vulnerability category.
@@ -70,28 +70,35 @@ The call graph is source-level and intentionally conservative. Unresolved calls,
 parser diagnostics and unbound entrypoints are reported as coverage limitations;
 they are never interpreted as proof that the project is safe.
 
-CodeQL is not used by the active audit workflow. The existing `codeql/` queries
-and Java integration remain in the repository as optional legacy components.
-The service does not create a CodeQL database before invoking Claude.
+The active workflow is implemented by the JDK compiler AST index and Claude
+semantic review. It does not require an external static-analysis database.
 
 Set `INTELLIGENT_ORCHESTRATOR_ENABLED=false` to require delegation to all
 available Subagents instead of model-selected specialists.
 
 ## Run
 
+Start the Python Sidecar first:
+
+```powershell
+cd sidecar
+$env:UV_CACHE_DIR = "$PWD\.uv-cache"
+$env:CLAUDE_SIDECAR_API_TOKEN = "replace-with-a-local-secret"
+uv sync
+uv run python -m claude_audit_sidecar
+```
+
+The Sidecar listens only on `http://127.0.0.1:8011` by default. It uses the
+credentials supported by the installed Claude Agent SDK environment.
+
+Start the Java service in another terminal:
+
 ```powershell
 $env:JAVA_HOME = "E:\Softwares\jdk-21.0.10+7"
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+$env:CLAUDE_SIDECAR_URL = "http://127.0.0.1:8011"
+$env:CLAUDE_SIDECAR_TOKEN = "replace-with-a-local-secret"
 mvn spring-boot:run
 ```
 
 The service listens on `http://localhost:8000`.
-
-Optional executable overrides:
-
-```powershell
-$env:CLAUDE_BIN = "C:\tools\claude.exe"
-```
-
-When `CLAUDE_BIN` is not set, the service also searches PATH and the standard
-Winget Claude Code package directory.

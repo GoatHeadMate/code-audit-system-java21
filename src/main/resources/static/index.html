@@ -131,7 +131,7 @@
     </div>
     <div>
       <span class="font-semibold text-slate-800">Code Audit System</span>
-      <span class="hidden sm:inline text-xs text-slate-400 ml-1.5">CodeQL + LLM</span>
+      <span class="hidden sm:inline text-xs text-slate-400 ml-1.5">Java 白盒分析 + Claude</span>
     </div>
   </div>
   <div id="health" class="flex items-center gap-1.5 text-xs text-slate-400">
@@ -156,7 +156,7 @@
       </div>
 
       <div id="fGit">
-        <input id="gitUrl" type="url" placeholder="https://github.com/…"
+        <input id="gitUrl" type="url" placeholder="https://github.com/…" oninput="discardInterfacePreview()"
           class="w-full bg-slate-50 border border-slate-200 text-sm text-slate-700
                  placeholder-slate-400 rounded-lg px-3 py-2
                  focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all" />
@@ -176,10 +176,9 @@
                hover:shadow disabled:opacity-50">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round"
-            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-          <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            d="M11 4a7 7 0 105.293 11.586L20 19.293M11 8v6m-3-3h6"/>
         </svg>
-        开始审计
+        扫描并选择接口
       </button>
       <div id="submitErr" class="hidden mt-1.5 text-xs text-red-500 text-center"></div>
     </div>
@@ -261,6 +260,69 @@
   </main>
 </div>
 
+<div id="interfaceModal"
+  class="hidden fixed inset-0 z-50 bg-slate-950/45 backdrop-blur-sm p-4 sm:p-8"
+  role="dialog" aria-modal="true" aria-labelledby="interfaceModalTitle">
+  <div class="mx-auto flex h-full max-h-[760px] max-w-4xl flex-col overflow-hidden rounded-2xl
+              border border-slate-200 bg-white shadow-2xl">
+    <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+      <div>
+        <div class="mb-1 flex items-center gap-2">
+          <span class="rounded-md bg-blue-50 px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-blue-600">
+            Scope
+          </span>
+          <span id="interfaceCount" class="text-xs font-medium text-slate-500"></span>
+        </div>
+        <h2 id="interfaceModalTitle" class="text-lg font-semibold text-slate-900">选择检测接口</h2>
+        <p class="mt-1 text-sm text-slate-500">仅为勾选入口构建调用路径，存储型异步链仍会继续追踪。</p>
+      </div>
+      <button onclick="closeInterfaceModal()" aria-label="关闭接口选择"
+        class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/80 px-5 py-3">
+      <div class="relative min-w-[220px] flex-1">
+        <svg class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400"
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="7"/><path stroke-linecap="round" d="M16.5 16.5L21 21"/>
+        </svg>
+        <input id="interfaceSearch" type="search" placeholder="搜索路径、方法、类或文件"
+          oninput="renderInterfaces()"
+          class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700
+                 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/15">
+      </div>
+      <button onclick="selectVisibleInterfaces()"
+        class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600
+               transition hover:border-blue-300 hover:text-blue-600">全选当前结果</button>
+      <button onclick="clearInterfaceSelection()"
+        class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600
+               transition hover:border-red-200 hover:text-red-500">清空选择</button>
+    </div>
+
+    <div id="interfaceList" class="flex-1 overflow-y-auto bg-slate-50 p-3 sm:p-4"></div>
+
+    <div class="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center">
+      <div class="flex-1 text-sm text-slate-500">
+        已选择 <strong id="selectedInterfaceCount" class="font-semibold text-blue-600">0</strong> 个接口
+      </div>
+      <div id="interfaceStartErr" class="hidden text-xs text-red-500"></div>
+      <button onclick="closeInterfaceModal()"
+        class="rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600
+               transition hover:bg-slate-50">取消</button>
+      <button id="startSelectedBtn" onclick="startSelectedAudit()"
+        class="flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm
+               font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed
+               disabled:opacity-45">
+        开始所选接口审计
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════ SCRIPT ═══════════════════════════════════════════════════ -->
 <script>
 // ── State ──────────────────────────────────────────────────────────
@@ -269,6 +331,9 @@ let srcMode  = 'git';
 let es       = null;
 let autoScrl = true;
 let jobs     = {};
+let previewJobId = null;
+let interfaces = [];
+let selectedInterfaces = new Set();
 
 // ── Boot ───────────────────────────────────────────────────────────
 ping();
@@ -291,6 +356,7 @@ async function ping() {
 
 // ── Source mode toggle ─────────────────────────────────────────────
 function setMode(m) {
+  if (srcMode !== m) discardInterfacePreview();
   srcMode = m;
   document.getElementById('tGit').className  = 'tog ' + (m==='git' ? 'on' : 'off');
   document.getElementById('tZip').className  = 'tog ' + (m==='zip' ? 'on' : 'off');
@@ -300,6 +366,7 @@ function setMode(m) {
 function onZip(inp) {
   document.getElementById('zipName').textContent =
     inp.files[0] ? `📁 ${inp.files[0].name}` : '📁 点击选择 ZIP 文件';
+  discardInterfacePreview();
 }
 
 // ── Submit ─────────────────────────────────────────────────────────
@@ -307,6 +374,11 @@ async function doSubmit() {
   const btn = document.getElementById('submitBtn');
   const err = document.getElementById('submitErr');
   err.classList.add('hidden');
+  if (previewJobId && interfaces.length) {
+    openInterfaceModal();
+    renderInterfaces();
+    return;
+  }
 
   const fd = new FormData();
   fd.append('lang', 'java');
@@ -325,40 +397,212 @@ async function doSubmit() {
   btn.innerHTML = `<svg class="w-4 h-4 spin" fill="none" viewBox="0 0 24 24">
     <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/>
     <path fill="currentColor" class="opacity-75" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
-  </svg> 提交中…`;
+  </svg> 正在扫描接口…`;
 
   try {
-    const r   = await fetch('/audit', { method:'POST', body:fd });
-    const raw = await r.text();
-    let res = {};
-    try {
-      res = raw ? JSON.parse(raw) : {};
-    } catch {
-      const preview = raw.replace(/\s+/g, ' ').slice(0, 160);
-      throw new Error(
-        `服务器返回了非 JSON 响应（HTTP ${r.status}）。` +
-        `请确认页面是通过 Java 服务地址打开，而不是直接打开 HTML 文件。` +
-        (preview ? ` 响应：${preview}` : '')
-      );
-    }
+    const r = await fetch('/audit/interfaces', { method:'POST', body:fd });
+    const res = await readJsonResponse(r);
     if (!r.ok) throw new Error(res.detail || `提交失败（HTTP ${r.status}）`);
 
-    document.getElementById('gitUrl').value  = '';
-    document.getElementById('zipFile').value = '';
-    document.getElementById('zipName').textContent = '📁 点击选择 ZIP 文件';
+    previewJobId = res.job_id;
+    interfaces = res.interfaces || [];
+    selectedInterfaces = new Set(interfaces.map(item => item.id));
+    document.getElementById('interfaceSearch').value = '';
+    document.getElementById('interfaceStartErr').classList.add('hidden');
+    openInterfaceModal();
+    renderInterfaces();
     await loadJobs();
-    select(res.job_id);
   } catch(e) {
     showErr(e.message);
   } finally {
     btn.disabled = false;
     btn.innerHTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
       <path stroke-linecap="round" stroke-linejoin="round"
-        d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-      <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-    </svg> 开始审计`;
+        d="M11 4a7 7 0 105.293 11.586L20 19.293M11 8v6m-3-3h6"/>
+    </svg> 扫描并选择接口`;
   }
 }
+
+async function readJsonResponse(response) {
+  const raw = await response.text();
+  try {
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    const preview = raw.replace(/\s+/g, ' ').slice(0, 160);
+    throw new Error(
+      `服务器返回了非 JSON 响应（HTTP ${response.status}）。` +
+      `请确认页面是通过 Java 服务地址打开，而不是直接打开 HTML 文件。` +
+      (preview ? ` 响应：${preview}` : '')
+    );
+  }
+}
+
+function openInterfaceModal() {
+  document.getElementById('interfaceModal').classList.remove('hidden');
+  document.body.classList.add('overflow-hidden');
+  setTimeout(() => document.getElementById('interfaceSearch').focus(), 50);
+}
+
+function closeInterfaceModal() {
+  document.getElementById('interfaceModal').classList.add('hidden');
+  document.body.classList.remove('overflow-hidden');
+}
+
+function resetInterfacePreview() {
+  previewJobId = null;
+  interfaces = [];
+  selectedInterfaces = new Set();
+}
+
+function discardInterfacePreview() {
+  const abandonedJobId = previewJobId;
+  resetInterfacePreview();
+  if (abandonedJobId) {
+    fetch(`/audit/${abandonedJobId}/preview`, {method: 'DELETE'})
+      .catch(() => {});
+  }
+}
+
+function filteredInterfaces() {
+  const query = document.getElementById('interfaceSearch').value
+    .trim().toLowerCase();
+  if (!query) return interfaces;
+  return interfaces.filter(item => [
+    item.route,
+    (item.operations || []).join(' '),
+    item.class_name,
+    item.method_name,
+    item.file_path,
+    item.framework
+  ].some(value => String(value || '').toLowerCase().includes(query)));
+}
+
+function renderInterfaces() {
+  const list = document.getElementById('interfaceList');
+  const filtered = filteredInterfaces();
+  document.getElementById('interfaceCount').textContent =
+    `${filtered.length} / ${interfaces.length} 个接口`;
+
+  if (!interfaces.length) {
+    list.innerHTML = `<div class="flex h-full flex-col items-center justify-center py-16 text-center">
+      <div class="mb-3 rounded-full bg-slate-100 p-3 text-slate-400">
+        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.7">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 9h8m-8 4h5m-8 7l-3-3V5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H9l-4 3z"/>
+        </svg>
+      </div>
+      <p class="text-sm font-medium text-slate-700">未发现可选择的 HTTP 或 WebSocket 接口</p>
+      <p class="mt-1 text-xs text-slate-400">请检查源码是否包含受支持的入口注解。</p>
+    </div>`;
+    updateSelectionCount();
+    return;
+  }
+
+  if (!filtered.length) {
+    list.innerHTML = `<div class="py-16 text-center text-sm text-slate-400">没有匹配的接口</div>`;
+    updateSelectionCount();
+    return;
+  }
+
+  list.innerHTML = `<div class="space-y-2">${filtered.map(item => {
+    const checked = selectedInterfaces.has(item.id);
+    const methods = (item.operations || ['ANY']).map(method =>
+      `<span class="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white">${esc(method)}</span>`
+    ).join('');
+    const secured = (item.security_annotations || []).length > 0;
+    return `<label class="group flex cursor-pointer gap-3 rounded-xl border p-3.5 transition
+                         ${checked ? 'border-blue-300 bg-blue-50/70 shadow-sm' : 'border-slate-200 bg-white hover:border-slate-300'}">
+      <input type="checkbox" class="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+        ${checked ? 'checked' : ''} onchange="toggleInterface('${item.id}', this.checked)">
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2">
+          ${methods}
+          <code class="break-all text-sm font-semibold text-slate-800">${esc(item.route || '/')}</code>
+          <span class="ml-auto rounded-full px-2 py-0.5 text-[10px] font-medium
+            ${secured ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">
+            ${secured ? '方法级鉴权' : '未发现方法级鉴权'}
+          </span>
+        </div>
+        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+          <span>${esc(item.class_name)}.${esc(item.method_name)}</span>
+          <span class="truncate font-mono text-[11px] text-slate-400">${esc(item.file_path)}:${item.start_line}</span>
+          <span>${esc(item.framework || item.protocol)}</span>
+        </div>
+      </div>
+    </label>`;
+  }).join('')}</div>`;
+  updateSelectionCount();
+}
+
+function toggleInterface(id, checked) {
+  checked ? selectedInterfaces.add(id) : selectedInterfaces.delete(id);
+  renderInterfaces();
+}
+
+function selectVisibleInterfaces() {
+  filteredInterfaces().forEach(item => selectedInterfaces.add(item.id));
+  renderInterfaces();
+}
+
+function clearInterfaceSelection() {
+  selectedInterfaces.clear();
+  renderInterfaces();
+}
+
+function updateSelectionCount() {
+  document.getElementById('selectedInterfaceCount').textContent =
+    selectedInterfaces.size;
+  document.getElementById('startSelectedBtn').disabled =
+    selectedInterfaces.size === 0 || !previewJobId;
+}
+
+async function startSelectedAudit() {
+  const btn = document.getElementById('startSelectedBtn');
+  const err = document.getElementById('interfaceStartErr');
+  err.classList.add('hidden');
+  if (!previewJobId || selectedInterfaces.size === 0) {
+    err.textContent = '请至少选择一个接口';
+    err.classList.remove('hidden');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = `<svg class="h-4 w-4 spin" fill="none" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"/>
+    <path fill="currentColor" class="opacity-75" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/>
+  </svg> 正在启动…`;
+  try {
+    const r = await fetch(`/audit/${previewJobId}/start`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({interface_ids: [...selectedInterfaces]})
+    });
+    const res = await readJsonResponse(r);
+    if (!r.ok) throw new Error(res.detail || `启动失败（HTTP ${r.status}）`);
+
+    const jobId = previewJobId;
+    closeInterfaceModal();
+    document.getElementById('gitUrl').value = '';
+    document.getElementById('zipFile').value = '';
+    document.getElementById('zipName').textContent = '📁 点击选择 ZIP 文件';
+    resetInterfacePreview();
+    await loadJobs();
+    select(jobId);
+  } catch (e) {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+  } finally {
+    btn.innerHTML = '开始所选接口审计';
+    updateSelectionCount();
+  }
+}
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape'
+      && !document.getElementById('interfaceModal').classList.contains('hidden')) {
+    closeInterfaceModal();
+  }
+});
+
 function showErr(msg) {
   const el = document.getElementById('submitErr');
   el.textContent = msg;
@@ -518,8 +762,6 @@ function colorize(t, type) {
     return `<span class="${labelClass} font-semibold">${label}</span>`
       + `<span class="text-slate-700 ml-2">${esc(body)}</span>`;
   }
-  if (t.startsWith('[codeql]'))
-    return `<span class="text-cyan-600 font-medium">[codeql]</span><span class="text-slate-600">${esc(t.slice(8))}</span>`;
   if (t.startsWith('[orchestrator]'))
     return `<span class="text-purple-600 font-medium">[orchestrator]</span><span class="text-slate-600">${esc(t.slice(14))}</span>`;
   const m = t.match(/^(\[[^\]]+\])([\s\S]*)/);
@@ -781,13 +1023,12 @@ function mkBadge(status, lg=false) {
   const m = {
     pending:     ['⏳','text-slate-500 bg-slate-100'],
     cloning:     ['⬇','text-blue-600 bg-blue-50'],
-    building_db: ['🔨','text-amber-600 bg-amber-50'],
     running:     ['▶','text-emerald-600 bg-emerald-50'],
     done:        ['✓','text-emerald-600 bg-emerald-50'],
     failed:      ['✗','text-red-600 bg-red-50'],
   };
   const [icon,cls] = m[status]||['?','text-slate-500 bg-slate-100'];
-  const anim = ['running','cloning','building_db'].includes(status)?' pulse':'';
+  const anim = ['running','cloning'].includes(status)?' pulse':'';
   const px   = lg ? 'px-2 py-0.5 text-xs' : 'px-1.5 py-0.5 text-xs';
   return `<span class="inline-flex items-center gap-1 rounded-full font-medium ${px} ${cls}${anim}">${icon} ${status}</span>`;
 }

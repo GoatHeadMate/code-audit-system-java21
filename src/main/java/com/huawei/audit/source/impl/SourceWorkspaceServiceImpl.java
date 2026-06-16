@@ -41,6 +41,10 @@ public class SourceWorkspaceServiceImpl implements SourceWorkspaceService {
 
     @Override
     public PreparedSource prepare(AuditJob job) throws Exception {
+        if (job.projectPath() != null
+                && Files.isDirectory(job.projectPath())) {
+            return new PreparedSource(job.projectPath(), "prepared");
+        }
         Path workDir = properties.absoluteWorkspace().resolve("audit_" + job.jobId());
         Path projectDir = workDir.resolve("project");
         Files.createDirectories(projectDir);

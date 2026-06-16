@@ -122,7 +122,7 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
         if (tree.getArguments() != null && !tree.getArguments().isEmpty()) {
             calls.add(new CallSite(
                     "<init>",
-                    "",
+                    type,
                     type,
                     tree.getArguments().size(),
                     tree.getArguments().stream()

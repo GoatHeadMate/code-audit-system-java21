@@ -3,11 +3,10 @@ package com.huawei.audit.analysis.impl;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.audit.agent.ClaudeGateway;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CallSite;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.MethodNode;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
-import com.huawei.audit.process.ProcessRunner;
-import com.huawei.audit.process.ProcessResult;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -44,12 +43,11 @@ final class SuspiciousCallReviewer {
 
     List<Sink> review(
             SourceIndex sourceIndex,
-            ProcessRunner processRunner,
-            String claudeBin,
+            ClaudeGateway claudeGateway,
             Path workingDirectory
     ) {
         try {
-            if (processRunner == null || claudeBin == null) {
+            if (claudeGateway == null) {
                 return List.of();
             }
             Set<String> existingSinkKeys = sourceIndex.sinks().stream()
@@ -112,18 +110,13 @@ final class SuspiciousCallReviewer {
                     .collect(Collectors.joining("\n"));
             String categories = String.join(", ", KNOWN_CATEGORIES);
             String prompt = PROMPT_TEMPLATE.formatted(callList, categories);
-            List<String> command = List.of(
-                    claudeBin, "--print", "--output-format", "json", "-p", prompt
-            );
-            ProcessResult result = processRunner.run(
-                    command, workingDirectory, Map.of(),
-                    Duration.ofSeconds(60), null, line -> {}
-            );
-            if (result.exitCode() != 0) {
-                return List.of();
-            }
             return parseAndConvert(
-                    String.join("\n", result.output()), suspicious
+                    claudeGateway.query(
+                            workingDirectory,
+                            prompt,
+                            Duration.ofSeconds(60)
+                    ),
+                    suspicious
             );
         } catch (Exception ignored) {
             return List.of();

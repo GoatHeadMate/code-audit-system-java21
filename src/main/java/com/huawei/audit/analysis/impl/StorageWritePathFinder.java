@@ -145,6 +145,7 @@ final class StorageWritePathFinder {
                         method.id(),
                         method.className(),
                         method.methodName(),
+                        method.parameterCount(),
                         method.filePath(),
                         method.startLine(),
                         method.endLine(),
@@ -155,7 +156,7 @@ final class StorageWritePathFinder {
 
     private String confidence(List<CallEdge> edges) {
         return edges.stream().anyMatch(edge ->
-                "unique-method-name".equals(edge.resolution()))
+                edge.resolution().startsWith("unique-method-name"))
                 ? "MEDIUM"
                 : "HIGH";
     }

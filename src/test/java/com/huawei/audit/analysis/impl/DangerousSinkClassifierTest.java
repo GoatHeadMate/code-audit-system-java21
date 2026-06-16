@@ -77,6 +77,44 @@ class DangerousSinkClassifierTest {
     }
 
     @Test
+    void constrainsDynamicLoadingToSupportedReceiverTypes() {
+        assertCategory(
+                "forName",
+                "Class.forName",
+                "Class",
+                "DYNAMIC_LOADING"
+        );
+        assertCategory(
+                "loadClass",
+                "loader.loadClass",
+                "URLClassLoader",
+                "DYNAMIC_LOADING"
+        );
+        assertCategory(
+                "defineClass",
+                "lookup.defineClass",
+                "MethodHandles.Lookup",
+                "DYNAMIC_LOADING"
+        );
+
+        assertThat(classifier.classify(
+                "forName",
+                "Charset.forName",
+                "Charset"
+        )).isNull();
+        assertThat(classifier.classify(
+                "forName",
+                "factory.forName",
+                "SomeFactory"
+        )).isNull();
+        assertThat(classifier.classify(
+                "forName",
+                "factory.forName",
+                "ClassNameFactory"
+        )).isNull();
+    }
+
+    @Test
     void recognizesCommandExecutionWrappers() {
         assertCategory(
                 "exec",

@@ -132,6 +132,7 @@ final class CandidatePathFinder {
                         method.id(),
                         method.className(),
                         method.methodName(),
+                        method.parameterCount(),
                         method.filePath(),
                         method.startLine(),
                         method.endLine(),
@@ -155,7 +156,7 @@ final class CandidatePathFinder {
             return "HIGH";
         }
         return edges.stream().anyMatch(edge ->
-                "unique-method-name".equals(edge.resolution()))
+                edge.resolution().startsWith("unique-method-name"))
                 ? "MEDIUM"
                 : "LOW";
     }

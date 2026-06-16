@@ -7,10 +7,7 @@ This project is independent from `D:\huawei\code-audit-system`.
 - Java 21 and Spring Boot 3.5 runtime
 - Existing REST paths and snake_case response contract
 - ZIP and Git source ingestion
-- Content/commit based CodeQL database cache
-- Cache completion marker to reject partial databases
-- Java `ProcessBuilder` integration for Git, CodeQL and Claude Code
-- Per-database cross-process `FileChannel` query lock
+- Java `ProcessBuilder` integration for Git
 - Maximum 15 concurrent hunters on virtual threads
 - Pluggable entrypoint discovery with Spring MVC, JAX-RS and Huawei ROA support
 - JDK compiler AST method, invocation, interface implementation and sink index
@@ -22,19 +19,22 @@ This project is independent from `D:\huawei\code-audit-system`.
 - LangChain4j-backed intelligent Orchestrator decisions
 - LangGraph4j state graph with evidence preparation, one Supervisor session and
   deterministic finalization
-- Native Claude Code custom Subagents generated per audit job
-- Exactly one Claude Code operating-system process per audit job
+- Python Claude Agent SDK Sidecar with typed HTTP and NDJSON contracts
+- Native Claude custom Subagents generated per audit job
+- One Claude Agent SDK Supervisor session per audit job
 - SSE log streaming
-- Existing static frontend, 15 Hunter prompts and retained legacy CodeQL resources
+- Existing static frontend and 15 Hunter prompts
 
 ## Deliberate differences
 
-- Claude is invoked through the local Claude Code executable because there is
-  no official Java Agent SDK equivalent to the Python SDK used by the original.
+- Java keeps ownership of AST analysis and orchestration while the official
+  Python Claude Agent SDK runs in a local Sidecar.
+- One-shot LLM enrichment and Supervisor sessions share one Java
+  `ClaudeGateway`; no Java component invokes the Claude CLI directly.
 - The Supervisor can use only Agent/Read/Glob/Grep. Native Hunter Subagents can
-  use only Read/Glob/Grep. Java retains control of CodeQL and locks.
-- The active workflow does not invoke CodeQL. Java prepares candidate call
-  paths; Claude validates controllability, security checks and exploitability.
+  use only Read/Glob/Grep.
+- Java prepares candidate call paths; Claude validates controllability,
+  security checks and exploitability.
 
 ## Remaining production work
 

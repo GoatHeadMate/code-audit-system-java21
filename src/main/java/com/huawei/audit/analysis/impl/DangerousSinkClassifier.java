@@ -40,7 +40,7 @@ final class DangerousSinkClassifier {
         if (isDeserialization(method, lowerExpression, lowerType)) {
             return match("NATIVE_DESERIALIZATION", expression);
         }
-        if (isDynamicLoading(method, lowerExpression, lowerType)) {
+        if (isDynamicLoading(method, lowerType)) {
             return match("DYNAMIC_LOADING", expression);
         }
         if (isSqlExecution(method, lowerExpression, lowerType)) {
@@ -239,21 +239,59 @@ final class DangerousSinkClassifier {
 
     private boolean isDynamicLoading(
             String method,
-            String expression,
             String receiverType
     ) {
-        String target = (expression + " " + receiverType).toLowerCase(Locale.ROOT);
         if ("forName".equals(method)) {
-            return containsAny(target, "class");
+            return typeEquals(receiverType, "Class");
         }
         if ("loadClass".equals(method)) {
-            return containsAny(target, "classloader", "urlclassloader");
+            return typeEndsWith(receiverType, "ClassLoader");
         }
         if ("defineClass".equals(method)) {
-            return containsAny(target, "classloader", "methodhandles", "lookup");
+            return typeEndsWith(receiverType, "ClassLoader")
+                    || typeEquals(receiverType, "Lookup");
         }
-        return Set.of("invoke", "newInstance").contains(method)
-                && containsAny(target, "method", "constructor", "class");
+        if ("invoke".equals(method)) {
+            return typeEquals(receiverType, "Method");
+        }
+        if ("newInstance".equals(method)) {
+            return typeEquals(receiverType, "Class")
+                    || typeEquals(receiverType, "Constructor");
+        }
+        return false;
+    }
+
+    private boolean typeEquals(String receiverType, String expectedSimpleName) {
+        if (receiverType == null || receiverType.isBlank()) {
+            return false;
+        }
+        String normalized = receiverType.replace('$', '.');
+        int genericStart = normalized.indexOf('<');
+        if (genericStart >= 0) {
+            normalized = normalized.substring(0, genericStart);
+        }
+        int separator = normalized.lastIndexOf('.');
+        String simpleName = separator >= 0
+                ? normalized.substring(separator + 1)
+                : normalized;
+        return expectedSimpleName.equalsIgnoreCase(simpleName);
+    }
+
+    private boolean typeEndsWith(String receiverType, String suffix) {
+        if (receiverType == null || receiverType.isBlank()) {
+            return false;
+        }
+        String normalized = receiverType.replace('$', '.');
+        int genericStart = normalized.indexOf('<');
+        if (genericStart >= 0) {
+            normalized = normalized.substring(0, genericStart);
+        }
+        int separator = normalized.lastIndexOf('.');
+        String simpleName = separator >= 0
+                ? normalized.substring(separator + 1)
+                : normalized;
+        return simpleName.toLowerCase(Locale.ROOT)
+                .endsWith(suffix.toLowerCase(Locale.ROOT));
     }
 
     private boolean isReplaceCommandExecution(String method, String lowerExpression) {

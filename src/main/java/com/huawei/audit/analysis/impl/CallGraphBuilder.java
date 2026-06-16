@@ -166,7 +166,6 @@ final class CallGraphBuilder {
                 && !"super".equals(call.receiver())
                 && !call.receiver().contains("(")
                 && Character.isLowerCase(call.receiver().charAt(0))) {
-            attemptedTypeLookup = true;
             String inferredType = Character.toUpperCase(
                     call.receiver().charAt(0))
                     + call.receiver().substring(1);

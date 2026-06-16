@@ -1,6 +1,8 @@
 package com.huawei.audit.analysis.impl;
 
 import com.huawei.audit.analysis.EntryPointDiscoverer;
+import com.huawei.audit.analysis.EntryPointSelector;
+import com.huawei.audit.agent.ClaudeGateway;
 import com.huawei.audit.analysis.EntryPointDiscoverer.DiscoveredEntryPoint;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.AnalysisResult;
@@ -11,11 +13,11 @@ import com.huawei.audit.analysis.WhiteBoxAnalysisService.StorageWritePath;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StoredCandidate;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.TaintSummary;
 import com.huawei.audit.analysis.impl.DangerousSinkClassifier.ExtraSinkRule;
-import com.huawei.audit.process.ProcessRunner;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -56,11 +58,11 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
     public AnalysisResult analyze(
             Path sourceRoot,
             List<Map<String, String>> dependencies,
-            ProcessRunner processRunner,
-            String claudeBin
+            ClaudeGateway claudeGateway,
+            Set<String> selectedInterfaceIds
     ) throws Exception {
         List<ExtraSinkRule> extraRules = new LlmSinkExpander().expand(
-                dependencies, processRunner, claudeBin, sourceRoot
+                dependencies, claudeGateway, sourceRoot
         );
 
         List<DiscoveredEntryPoint> discovered = new ArrayList<>();
@@ -77,7 +79,7 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
         );
 
         List<Sink> llmReviewedSinks = new SuspiciousCallReviewer().review(
-                sourceIndex, processRunner, claudeBin, sourceRoot
+                sourceIndex, claudeGateway, sourceRoot
         );
         SourceIndex finalIndex = sourceIndex.withAdditionalSinks(llmReviewedSinks);
 
@@ -87,9 +89,13 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
                 finalIndex, callGraph);
         SourceIndex enrichedIndex = finalIndex.withAdditionalSinks(transitiveSinks);
 
-        List<EntryPoint> entryPoints = entryPointBinder.bind(
+        List<EntryPoint> allEntryPoints = entryPointBinder.bind(
                 discovered,
                 enrichedIndex
+        );
+        List<EntryPoint> entryPoints = filterEntryPoints(
+                allEntryPoints,
+                selectedInterfaceIds
         );
         List<CandidatePath> candidates = candidatePathFinder.find(
                 entryPoints,
@@ -101,6 +107,13 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
                 taintSummarizer.summarizeAll(enrichedIndex.methods());
         List<CandidatePath> taintVerifiedCandidates =
                 taintFlowVerifier.verify(candidates, taintSummaries);
+        List<CandidatePath> visibleCandidates = selectedInterfaceIds.isEmpty()
+                ? taintVerifiedCandidates
+                : taintVerifiedCandidates.stream()
+                        .filter(candidate -> EntryPointSelector.selectable(
+                                candidate.entryPoint().protocol()
+                        ))
+                        .toList();
 
         List<StorageWritePath> writePaths = storageWritePathFinder.find(
                 entryPoints,
@@ -116,7 +129,7 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
         return new AnalysisResult(
                 entryPoints,
                 enrichedIndex.sinks(),
-                taintVerifiedCandidates,
+                visibleCandidates,
                 enrichedIndex.storageAccesses(),
                 storedCandidates,
                 callGraph.unresolvedCalls(),
@@ -126,12 +139,28 @@ public class WhiteBoxAnalysisServiceImpl implements WhiteBoxAnalysisService {
                         enrichedIndex,
                         callGraph,
                         entryPoints,
-                        taintVerifiedCandidates,
+                        visibleCandidates,
                         storedCandidates,
                         extraRules.size(),
                         llmReviewedSinks.size()
                 ),
                 Map.copyOf(taintSummaries)
         );
+    }
+
+    private List<EntryPoint> filterEntryPoints(
+            List<EntryPoint> entryPoints,
+            Set<String> selectedInterfaceIds
+    ) {
+        if (selectedInterfaceIds.isEmpty()) {
+            return entryPoints;
+        }
+        return entryPoints.stream()
+                .filter(entryPoint ->
+                        !EntryPointSelector.selectable(entryPoint.protocol())
+                                || selectedInterfaceIds.contains(
+                                        EntryPointSelector.id(entryPoint)
+                                ))
+                .toList();
     }
 }

@@ -2,6 +2,11 @@ package com.huawei.audit.agent.impl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.huawei.audit.analysis.WhiteBoxAnalysisService.CandidatePath;
+import com.huawei.audit.analysis.WhiteBoxAnalysisService.EntryPoint;
+import com.huawei.audit.analysis.WhiteBoxAnalysisService.MethodStep;
+import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -21,5 +26,68 @@ class EvidencePackagePolicyTest {
                 assertThat(EvidencePackagePolicy.sinkCategories(hunter))
                         .as(hunter)
                         .contains(category));
+    }
+
+    @Test
+    void summarizesAuthorizationSurfaceWithReachableSinks() {
+        EntryPoint entryPoint = new EntryPoint(
+                "entry-1",
+                "HTTP",
+                List.of("POST"),
+                "/admin/run",
+                "AdminController",
+                "run",
+                "AdminController.java",
+                10,
+                "spring-mvc",
+                List.of(),
+                "annotation",
+                "HIGH",
+                "AdminController#run/1",
+                "BOUND"
+        );
+        Sink sink = new Sink(
+                "sink-1",
+                "COMMAND_EXECUTION",
+                "new ProcessBuilder",
+                "CommandService#run/1",
+                "CommandService.java",
+                20,
+                "new ProcessBuilder(command)"
+        );
+        CandidatePath candidate = new CandidatePath(
+                "candidate-1",
+                entryPoint,
+                sink,
+                List.of(new MethodStep(
+                        "AdminController#run/1",
+                        "AdminController",
+                        "run",
+                        1,
+                        "AdminController.java",
+                        10,
+                        12,
+                        "void run(String command)"
+                )),
+                List.of(),
+                "HIGH",
+                1,
+                "PENDING_CLAUDE_REVIEW",
+                "LIKELY",
+                List.of(),
+                "REQUEST_CONTROLLED"
+        );
+
+        assertThat(EvidencePackagePolicy.authorizationSurface(
+                List.of(entryPoint),
+                List.of(candidate)
+        )).singleElement().satisfies(summary -> {
+            assertThat(summary)
+                    .containsEntry("path", "/admin/run")
+                    .containsEntry("method_security_present", false)
+                    .containsEntry("candidate_path_count", 1);
+            assertThat(summary.get("reachable_sink_categories"))
+                    .isEqualTo(List.of("COMMAND_EXECUTION"));
+        });
     }
 }

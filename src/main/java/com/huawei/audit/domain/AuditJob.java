@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayDeque;
+import java.util.Set;
 
 public final class AuditJob {
     private final String jobId;
@@ -21,12 +22,13 @@ public final class AuditJob {
     private volatile Path zipPath;
     private volatile Path workDir;
     private volatile Path projectPath;
-    private volatile Path dbPath;
     private volatile String error = "";
     private volatile List<Map<String, Object>> findings = List.of();
     private volatile Map<String, Object> stats = Map.of();
     private volatile Map<String, Object> techProfile = Map.of();
     private volatile Map<String, Object> taskSummary = Map.of();
+    private volatile Set<String> selectedInterfaceIds = Set.of();
+    private volatile boolean submitted;
     private volatile boolean logDone;
 
     public AuditJob(String jobId, String lang) {
@@ -69,12 +71,13 @@ public final class AuditJob {
     public Path zipPath() { return zipPath; }
     public Path workDir() { return workDir; }
     public Path projectPath() { return projectPath; }
-    public Path dbPath() { return dbPath; }
     public String error() { return error; }
     public List<Map<String, Object>> findings() { return findings; }
     public Map<String, Object> stats() { return stats; }
     public Map<String, Object> techProfile() { return techProfile; }
     public Map<String, Object> taskSummary() { return taskSummary; }
+    public Set<String> selectedInterfaceIds() { return selectedInterfaceIds; }
+    public boolean submitted() { return submitted; }
     public List<String> logHistory() {
         synchronized (logHistory) {
             return List.copyOf(logHistory);
@@ -88,7 +91,6 @@ public final class AuditJob {
     public void zipPath(Path zipPath) { this.zipPath = zipPath; }
     public void workDir(Path workDir) { this.workDir = workDir; }
     public void projectPath(Path projectPath) { this.projectPath = projectPath; }
-    public void dbPath(Path dbPath) { this.dbPath = dbPath; }
     public void findings(List<Map<String, Object>> findings) {
         this.findings = List.copyOf(findings);
     }
@@ -98,6 +100,14 @@ public final class AuditJob {
     }
     public void taskSummary(Map<String, Object> taskSummary) {
         this.taskSummary = Map.copyOf(taskSummary);
+    }
+    public synchronized boolean submitOnce(Set<String> interfaceIds) {
+        if (submitted) {
+            return false;
+        }
+        selectedInterfaceIds = Set.copyOf(interfaceIds);
+        submitted = true;
+        return true;
     }
     public void logDone(boolean logDone) { this.logDone = logDone; }
 
@@ -112,6 +122,7 @@ public final class AuditJob {
         meta.put("created_at", createdAt.toString());
         meta.put("updated_at", updatedAt.toString());
         meta.put("findings_count", findings.size());
+        meta.put("selected_interface_ids", selectedInterfaceIds);
         return meta;
     }
 }
