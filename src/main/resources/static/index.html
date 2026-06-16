@@ -821,15 +821,15 @@ function mkFinding(f) {
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap mb-1.5">
             ${mkSev(sev)}
-            <code class="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium">${esc(f.rule_id||'')}</code>
-            ${isChain?'<span class="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 border border-purple-200 font-medium">攻击链</span>':''}
-            <span class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">${esc(vtype.replace(/_/g,' '))}</span>
+            <code class="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded font-medium whitespace-nowrap">${esc(f.rule_id||'')}</code>
+            ${isChain?'<span class="text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-600 border border-purple-200 font-medium whitespace-nowrap">攻击链</span>':''}
+            <span class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 whitespace-nowrap">${esc(vtype.replace(/_/g,' '))}</span>
           </div>
           <h3 class="text-sm font-semibold text-slate-800 leading-snug">${esc(f.title||'')}</h3>
         </div>
-        <div class="shrink-0 text-right">
+        <div class="shrink-0 text-right max-w-[40%]">
           <div class="text-xs text-slate-400">置信度: <span class="font-medium text-slate-600">${esc(confLabel)}</span></div>
-          ${f.reachability?`<div class="text-xs text-slate-400 mt-0.5">${esc(f.reachability)}</div>`:''}
+          ${f.reachability?`<div class="text-xs text-slate-400 mt-0.5 break-words">${esc(f.reachability)}</div>`:''}
         </div>
       </div>
 
@@ -844,7 +844,7 @@ function mkFinding(f) {
             <span class="font-bold">${esc(f.http_method)}</span> ${esc(f.http_path)}
           </span>`:''}
         ${f.entrypoint?`
-          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-50 text-slate-600 border border-slate-200 font-mono">
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-50 text-slate-600 border border-slate-200 font-mono break-all min-w-0">
             ${esc(f.entrypoint)}
           </span>`:''}
       </div>`:''}
