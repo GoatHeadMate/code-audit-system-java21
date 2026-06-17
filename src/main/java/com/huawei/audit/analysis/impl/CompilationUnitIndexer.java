@@ -31,6 +31,7 @@ final class CompilationUnitIndexer extends VoidVisitorAdapter<Void> {
     private final Map<String, Set<String>> implementations;
     private final AtomicInteger methodSequence;
     private final List<DangerousSinkClassifier.ExtraSinkRule> extraRules;
+    private final boolean symbolSolverEnabled;
     private final Deque<ClassContext> classes = new ArrayDeque<>();
 
     CompilationUnitIndexer(
@@ -39,7 +40,8 @@ final class CompilationUnitIndexer extends VoidVisitorAdapter<Void> {
             List<Sink> sinks,
             Map<String, Set<String>> implementations,
             AtomicInteger methodSequence,
-            List<DangerousSinkClassifier.ExtraSinkRule> extraRules
+            List<DangerousSinkClassifier.ExtraSinkRule> extraRules,
+            boolean symbolSolverEnabled
     ) {
         this.filePath = filePath;
         this.methods = methods;
@@ -47,6 +49,7 @@ final class CompilationUnitIndexer extends VoidVisitorAdapter<Void> {
         this.implementations = implementations;
         this.methodSequence = methodSequence;
         this.extraRules = extraRules;
+        this.symbolSolverEnabled = symbolSolverEnabled;
     }
 
     @Override
@@ -154,7 +157,8 @@ final class CompilationUnitIndexer extends VoidVisitorAdapter<Void> {
                 methodId,
                 variableTypes,
                 sinks,
-                extraRules
+                extraRules,
+                symbolSolverEnabled
         );
         if (owner.actuatorEndpoint() && hasAnnotation(
                 tree.getAnnotations(),

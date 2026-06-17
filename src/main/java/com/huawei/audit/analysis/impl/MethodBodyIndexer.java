@@ -13,6 +13,7 @@ import com.huawei.audit.analysis.WhiteBoxAnalysisService.StorageAccess;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
@@ -26,19 +27,22 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
     private final DangerousSinkClassifier sinkClassifier;
     private final StorageAccessClassifier storageClassifier =
             new StorageAccessClassifier();
+    private final boolean symbolSolverEnabled;
 
     MethodBodyIndexer(
             CompilationUnitIndexer source,
             String methodId,
             Map<String, String> variableTypes,
             List<Sink> sinks,
-            List<DangerousSinkClassifier.ExtraSinkRule> extraRules
+            List<DangerousSinkClassifier.ExtraSinkRule> extraRules,
+            boolean symbolSolverEnabled
     ) {
         this.source = source;
         this.methodId = methodId;
         this.variableTypes = variableTypes;
         this.sinks = sinks;
         this.sinkClassifier = new DangerousSinkClassifier(extraRules);
+        this.symbolSolverEnabled = symbolSolverEnabled;
     }
 
     @Override
@@ -54,7 +58,8 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
     public void visit(MethodCallExpr tree, Void unused) {
         String methodName = tree.getNameAsString();
         String receiver = tree.getScope().map(Object::toString).orElse("");
-        String receiverType = receiverType(receiver);
+        String receiverType = resolveScopeType(tree)
+                .orElseGet(() -> receiverType(receiver));
         String expression = source.sourceText(tree, 500);
         calls.add(new CallSite(
                 methodName,
@@ -187,7 +192,35 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
                 : AnalysisTextUtils.startsUppercase(root) ? root : "";
     }
 
+    private Optional<String> resolveScopeType(MethodCallExpr call) {
+        if (!symbolSolverEnabled) {
+            return Optional.empty();
+        }
+        return call.getScope().flatMap(scope -> {
+            try {
+                String resolved = AnalysisTextUtils.simpleName(
+                        scope.calculateResolvedType().describe());
+                return resolved.isBlank()
+                        ? Optional.empty()
+                        : Optional.of(resolved);
+            } catch (Throwable ignored) {
+                return Optional.empty();
+            }
+        });
+    }
+
     private String expressionType(Expression expression) {
+        if (symbolSolverEnabled) {
+            try {
+                String resolved = AnalysisTextUtils.simpleName(
+                        expression.calculateResolvedType().describe());
+                if (!resolved.isBlank()) {
+                    return resolved;
+                }
+            } catch (Throwable ignored) {
+                // Fall back to the lexical heuristic below.
+            }
+        }
         if (expression.isNameExpr()) {
             return variableTypes.getOrDefault(
                     expression.asNameExpr().getNameAsString(),
