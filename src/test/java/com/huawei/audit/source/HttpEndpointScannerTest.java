@@ -184,4 +184,35 @@ class HttpEndpointScannerTest {
                 .containsExactly("/enum/ping");
     }
 
+    @Test
+    void resolvesSameFileConstantsInRouteAnnotations() throws Exception {
+        Files.writeString(tempDir.resolve("ConstController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                final class OtherConstants {
+                    static final String RUN = "/wrong";
+                }
+
+                @RestController
+                @RequestMapping(ConstController.BASE)
+                class ConstController {
+                    static final String BASE = "/api";
+                    static final String RUN = "/run";
+
+                    @PostMapping(path = RUN + Constants.EXTRA)
+                    String run() { return ""; }
+                }
+
+                final class Constants {
+                    static final String EXTRA = "/exec";
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(endpoint -> endpoint.httpMethods().getFirst()
+                        + " " + endpoint.httpPath())
+                .containsExactly("POST /api/run/exec");
+    }
 }
