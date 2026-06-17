@@ -1,24 +1,21 @@
 package com.huawei.audit.analysis.impl;
 
+import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.MethodReferenceExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CallSite;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StorageAccess;
-import com.sun.source.tree.ExpressionTree;
-import com.sun.source.tree.IdentifierTree;
-import com.sun.source.tree.MemberSelectTree;
-import com.sun.source.tree.MemberReferenceTree;
-import com.sun.source.tree.MethodInvocationTree;
-import com.sun.source.tree.NewClassTree;
-import com.sun.source.tree.ParenthesizedTree;
-import com.sun.source.tree.TypeCastTree;
-import com.sun.source.tree.VariableTree;
-import com.sun.source.util.TreeScanner;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-final class MethodBodyIndexer extends TreeScanner<Void, Void> {
+final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
     private final CompilationUnitIndexer source;
     private final String methodId;
     private final Map<String, String> variableTypes;
@@ -45,38 +42,40 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
     }
 
     @Override
-    public Void visitVariable(VariableTree tree, Void unused) {
-        if (tree.getType() != null) {
-            variableTypes.put(
-                    tree.getName().toString(),
-                    AnalysisTextUtils.simpleName(tree.getType().toString())
-            );
-        }
-        return super.visitVariable(tree, unused);
+    public void visit(VariableDeclarator tree, Void unused) {
+        variableTypes.put(
+                tree.getNameAsString(),
+                AnalysisTextUtils.simpleName(tree.getType().asString())
+        );
+        super.visit(tree, unused);
     }
 
     @Override
-    public Void visitMethodInvocation(MethodInvocationTree tree, Void unused) {
-        Invocation invocation = invocation(tree);
-        String receiverType = receiverType(invocation.receiver());
+    public void visit(MethodCallExpr tree, Void unused) {
+        String methodName = tree.getNameAsString();
+        String receiver = tree.getScope().map(Object::toString).orElse("");
+        String receiverType = receiverType(receiver);
         String expression = source.sourceText(tree, 500);
         calls.add(new CallSite(
-                invocation.methodName(),
-                invocation.receiver(),
+                methodName,
+                receiver,
                 receiverType,
                 tree.getArguments().size(),
                 tree.getArguments().stream()
                         .map(this::expressionType)
                         .toList(),
                 tree.getArguments().stream()
-                        .map(arg -> source.sourceText(arg, 200))
+                        .map(argument -> source.sourceText(argument, 200))
                         .toList(),
                 source.line(tree, true),
                 expression
         ));
+        String methodSelect = tree.getScope()
+                .map(scope -> scope.toString() + "." + methodName)
+                .orElse(methodName);
         DangerousSinkClassifier.SinkMatch sink = sinkClassifier.classify(
-                invocation.methodName(),
-                tree.getMethodSelect().toString(),
+                methodName,
+                methodSelect,
                 receiverType
         );
         if (sink != null) {
@@ -86,24 +85,24 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
                 methodId,
                 source.filePath(),
                 source.line(tree, true),
-                invocation.methodName(),
-                invocation.receiver(),
+                methodName,
+                receiver,
                 receiverType,
                 expression,
                 tree.getArguments().isEmpty()
                         ? ""
-                        : tree.getArguments().getFirst().toString(),
+                        : tree.getArgument(0).toString(),
                 variableTypes
         );
         if (storage != null) {
             storageAccesses.add(storage);
         }
-        return super.visitMethodInvocation(tree, unused);
+        super.visit(tree, unused);
     }
 
     @Override
-    public Void visitNewClass(NewClassTree tree, Void unused) {
-        String type = AnalysisTextUtils.simpleName(tree.getIdentifier().toString());
+    public void visit(ObjectCreationExpr tree, Void unused) {
+        String type = AnalysisTextUtils.simpleName(tree.getType().asString());
         if ("ProcessBuilder".equals(type)) {
             addSink("COMMAND_EXECUTION", "new ProcessBuilder", tree);
         } else if ("XMLDecoder".equals(type)) {
@@ -112,14 +111,14 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
             addSink("DYNAMIC_LOADING", "new URLClassLoader", tree);
         } else if ("RedirectView".equals(type)) {
             addSink("HTTP_REDIRECT", "new RedirectView", tree);
-        } else         if (Set.of(
+        } else if (Set.of(
                 "FileOutputStream",
                 "FileWriter",
                 "RandomAccessFile"
         ).contains(type)) {
             addSink("FILE_WRITE", "new " + type, tree);
         }
-        if (tree.getArguments() != null && !tree.getArguments().isEmpty()) {
+        if (!tree.getArguments().isEmpty()) {
             calls.add(new CallSite(
                     "<init>",
                     type,
@@ -129,19 +128,19 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
                             .map(this::expressionType)
                             .toList(),
                     tree.getArguments().stream()
-                            .map(arg -> source.sourceText(arg, 200))
+                            .map(argument -> source.sourceText(argument, 200))
                             .toList(),
                     source.line(tree, true),
                     source.sourceText(tree, 500)
             ));
         }
-        return super.visitNewClass(tree, unused);
+        super.visit(tree, unused);
     }
 
     @Override
-    public Void visitMemberReference(MemberReferenceTree tree, Void unused) {
-        methodReferences.add(tree.getName().toString());
-        return super.visitMemberReference(tree, unused);
+    public void visit(MethodReferenceExpr tree, Void unused) {
+        methodReferences.add(tree.getIdentifier());
+        super.visit(tree, unused);
     }
 
     List<CallSite> calls() {
@@ -160,30 +159,16 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
         return storageAccesses;
     }
 
-    private void addSink(String category, String api, com.sun.source.tree.Tree tree) {
+    private void addSink(String category, String api, Node node) {
         sinks.add(new Sink(
                 "sink-" + (sinks.size() + 1),
                 category,
                 api,
                 methodId,
                 source.filePath(),
-                source.line(tree, true),
-                source.sourceText(tree, 500)
+                source.line(node, true),
+                source.sourceText(node, 500)
         ));
-    }
-
-    private Invocation invocation(MethodInvocationTree tree) {
-        ExpressionTree select = tree.getMethodSelect();
-        if (select instanceof MemberSelectTree member) {
-            return new Invocation(
-                    member.getIdentifier().toString(),
-                    member.getExpression().toString()
-            );
-        }
-        if (select instanceof IdentifierTree identifier) {
-            return new Invocation(identifier.getName().toString(), "");
-        }
-        return new Invocation(select.toString(), "");
     }
 
     private String receiverType(String receiver) {
@@ -202,26 +187,26 @@ final class MethodBodyIndexer extends TreeScanner<Void, Void> {
                 : AnalysisTextUtils.startsUppercase(root) ? root : "";
     }
 
-    private String expressionType(ExpressionTree expression) {
-        if (expression instanceof IdentifierTree identifier) {
+    private String expressionType(Expression expression) {
+        if (expression.isNameExpr()) {
             return variableTypes.getOrDefault(
-                    identifier.getName().toString(),
+                    expression.asNameExpr().getNameAsString(),
                     ""
             );
         }
-        if (expression instanceof NewClassTree newClass) {
+        if (expression.isObjectCreationExpr()) {
             return AnalysisTextUtils.simpleName(
-                    newClass.getIdentifier().toString()
+                    expression.asObjectCreationExpr().getType().asString()
             );
         }
-        if (expression instanceof TypeCastTree cast) {
-            return AnalysisTextUtils.simpleName(cast.getType().toString());
+        if (expression.isCastExpr()) {
+            return AnalysisTextUtils.simpleName(
+                    expression.asCastExpr().getType().asString()
+            );
         }
-        if (expression instanceof ParenthesizedTree parenthesized) {
-            return expressionType(parenthesized.getExpression());
+        if (expression.isEnclosedExpr()) {
+            return expressionType(expression.asEnclosedExpr().getInner());
         }
         return "";
     }
-
-    private record Invocation(String methodName, String receiver) { }
 }

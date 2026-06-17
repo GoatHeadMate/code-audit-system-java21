@@ -1,17 +1,21 @@
 package com.huawei.audit.analysis.impl;
 
+import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.NodeList;
+import com.github.javaparser.ast.body.EnumDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.Parameter;
+import com.github.javaparser.ast.body.RecordDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.AnnotationExpr;
+import com.github.javaparser.ast.type.ClassOrInterfaceType;
+import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.MethodNode;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
-import com.sun.source.tree.AnnotationTree;
-import com.sun.source.tree.ClassTree;
-import com.sun.source.tree.CompilationUnitTree;
-import com.sun.source.tree.MethodTree;
-import com.sun.source.tree.Tree;
-import com.sun.source.tree.VariableTree;
-import com.sun.source.util.SourcePositions;
-import com.sun.source.util.TreePathScanner;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -19,13 +23,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 
-final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
-    private final CompilationUnitTree unit;
-    private final SourcePositions positions;
+final class CompilationUnitIndexer extends VoidVisitorAdapter<Void> {
     private final String filePath;
-    private final String source;
     private final List<MethodNode> methods;
     private final List<Sink> sinks;
     private final Map<String, Set<String>> implementations;
@@ -34,20 +34,14 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
     private final Deque<ClassContext> classes = new ArrayDeque<>();
 
     CompilationUnitIndexer(
-            CompilationUnitTree unit,
-            SourcePositions positions,
             String filePath,
-            String source,
             List<MethodNode> methods,
             List<Sink> sinks,
             Map<String, Set<String>> implementations,
             AtomicInteger methodSequence,
             List<DangerousSinkClassifier.ExtraSinkRule> extraRules
     ) {
-        this.unit = unit;
-        this.positions = positions;
         this.filePath = filePath;
-        this.source = source;
         this.methods = methods;
         this.sinks = sinks;
         this.implementations = implementations;
@@ -56,36 +50,70 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
     }
 
     @Override
-    public Void visitClass(ClassTree tree, Void unused) {
-        String className = tree.getSimpleName().toString();
+    public void visit(ClassOrInterfaceDeclaration tree, Void unused) {
+        NodeList<ClassOrInterfaceType> extended = tree.getExtendedTypes();
+        NodeList<ClassOrInterfaceType> implemented = tree.getImplementedTypes();
+        // javac models interface super-interfaces as the "implements" clause.
+        Set<String> implInterfaces = new LinkedHashSet<>();
+        (tree.isInterface() ? extended : implemented).forEach(type ->
+                implInterfaces.add(AnalysisTextUtils.simpleName(type.toString())));
+        String extendsClass = !tree.isInterface() && !extended.isEmpty()
+                ? AnalysisTextUtils.simpleName(extended.get(0).toString())
+                : "";
+        extended.forEach(type ->
+                registerImplementation(type.toString(), tree.getNameAsString()));
+        implemented.forEach(type ->
+                registerImplementation(type.toString(), tree.getNameAsString()));
+        pushContext(tree, extendsClass, implInterfaces);
+        super.visit(tree, unused);
+        classes.pop();
+    }
+
+    @Override
+    public void visit(EnumDeclaration tree, Void unused) {
+        enterImplementingType(tree, tree.getImplementedTypes());
+        super.visit(tree, unused);
+        classes.pop();
+    }
+
+    @Override
+    public void visit(RecordDeclaration tree, Void unused) {
+        enterImplementingType(tree, tree.getImplementedTypes());
+        super.visit(tree, unused);
+        classes.pop();
+    }
+
+    private void enterImplementingType(
+            TypeDeclaration<?> tree,
+            NodeList<ClassOrInterfaceType> implemented
+    ) {
+        Set<String> implInterfaces = new LinkedHashSet<>();
+        implemented.forEach(type -> {
+            implInterfaces.add(AnalysisTextUtils.simpleName(type.toString()));
+            registerImplementation(type.toString(), tree.getNameAsString());
+        });
+        pushContext(tree, "", implInterfaces);
+    }
+
+    private void pushContext(
+            TypeDeclaration<?> tree,
+            String extendsClass,
+            Set<String> implInterfaces
+    ) {
         Map<String, String> fieldTypes = new LinkedHashMap<>();
-        for (Tree member : tree.getMembers()) {
-            if (member instanceof VariableTree variable) {
+        for (FieldDeclaration field : tree.getFields()) {
+            for (VariableDeclarator variable : field.getVariables()) {
                 fieldTypes.put(
-                        variable.getName().toString(),
-                        AnalysisTextUtils.simpleName(variable.getType().toString())
+                        variable.getNameAsString(),
+                        AnalysisTextUtils.simpleName(variable.getType().asString())
                 );
             }
         }
-        for (Tree implemented : tree.getImplementsClause()) {
-            registerImplementation(implemented.toString(), className);
-        }
-        if (tree.getExtendsClause() != null) {
-            registerImplementation(tree.getExtendsClause().toString(), className);
-        }
-        String extendsClass = tree.getExtendsClause() != null
-                ? AnalysisTextUtils.simpleName(
-                        tree.getExtendsClause().toString())
-                : "";
-        Set<String> implInterfaces = tree.getImplementsClause().stream()
-                .map(impl -> AnalysisTextUtils.simpleName(impl.toString()))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-
         classes.push(new ClassContext(
-                className,
+                tree.getNameAsString(),
                 Map.copyOf(fieldTypes),
                 hasAnnotation(
-                        tree.getModifiers().getAnnotations(),
+                        tree.getAnnotations(),
                         "Endpoint",
                         "WebEndpoint",
                         "ControllerEndpoint",
@@ -94,19 +122,16 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                 extendsClass,
                 Set.copyOf(implInterfaces)
         ));
-        super.visitClass(tree, unused);
-        classes.pop();
-        return null;
     }
 
     @Override
-    public Void visitMethod(MethodTree tree, Void unused) {
-        if (classes.isEmpty() || tree.getBody() == null) {
-            return null;
+    public void visit(MethodDeclaration tree, Void unused) {
+        if (classes.isEmpty() || tree.getBody().isEmpty()) {
+            return;
         }
         ClassContext owner = classes.peek();
         int startLine = line(tree, true);
-        String methodName = tree.getName().toString();
+        String methodName = tree.getNameAsString();
         String methodId = owner.className() + "#" + methodName + "/"
                 + tree.getParameters().size() + "@"
                 + filePath + ":" + startLine + ":"
@@ -114,14 +139,14 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
         Map<String, String> variableTypes = new LinkedHashMap<>(
                 owner.fieldTypes()
         );
-        for (VariableTree parameter : tree.getParameters()) {
+        for (Parameter parameter : tree.getParameters()) {
             variableTypes.put(
-                    parameter.getName().toString(),
-                    AnalysisTextUtils.simpleName(parameter.getType().toString())
+                    parameter.getNameAsString(),
+                    AnalysisTextUtils.simpleName(parameter.getType().asString())
             );
         }
         List<String> parameterNames = tree.getParameters().stream()
-                .map(parameter -> parameter.getName().toString())
+                .map(Parameter::getNameAsString)
                 .toList();
 
         MethodBodyIndexer body = new MethodBodyIndexer(
@@ -132,7 +157,7 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                 extraRules
         );
         if (owner.actuatorEndpoint() && hasAnnotation(
-                tree.getModifiers().getAnnotations(),
+                tree.getAnnotations(),
                 "ReadOperation",
                 "WriteOperation",
                 "DeleteOperation"
@@ -172,7 +197,7 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                     sourceText(tree, 500)
             ));
         }
-        body.scan(tree.getBody(), null);
+        tree.getBody().ifPresent(block -> block.accept(body, null));
         methods.add(new MethodNode(
                 methodId,
                 owner.className(),
@@ -188,26 +213,18 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
                 List.copyOf(body.methodReferences()),
                 List.copyOf(body.storageAccesses())
         ));
-        return null;
     }
 
-    int line(Tree tree, boolean start) {
-        long position = start
-                ? positions.getStartPosition(unit, tree)
-                : positions.getEndPosition(unit, tree);
-        return position < 0
-                ? 0
-                : (int) unit.getLineMap().getLineNumber(position);
+    int line(Node node, boolean start) {
+        return node.getRange()
+                .map(range -> start ? range.begin.line : range.end.line)
+                .orElse(0);
     }
 
-    String sourceText(Tree tree, int maxLength) {
-        long start = positions.getStartPosition(unit, tree);
-        long end = positions.getEndPosition(unit, tree);
-        if (start < 0 || end < start || start >= source.length()) {
-            return tree.toString().replaceAll("\\s+", " ").strip();
-        }
-        int boundedEnd = (int) Math.min(end, source.length());
-        String text = source.substring((int) start, boundedEnd)
+    String sourceText(Node node, int maxLength) {
+        String text = node.getTokenRange()
+                .map(Object::toString)
+                .orElseGet(node::toString)
                 .replaceAll("\\s+", " ")
                 .strip();
         return text.length() > maxLength
@@ -227,13 +244,13 @@ final class CompilationUnitIndexer extends TreePathScanner<Void, Void> {
     }
 
     private boolean hasAnnotation(
-            List<? extends AnnotationTree> annotations,
+            List<? extends AnnotationExpr> annotations,
             String... names
     ) {
         Set<String> accepted = Set.of(names);
         return annotations.stream()
                 .map(annotation -> AnalysisTextUtils.simpleName(
-                        annotation.getAnnotationType().toString()
+                        annotation.getNameAsString()
                 ))
                 .anyMatch(accepted::contains);
     }
