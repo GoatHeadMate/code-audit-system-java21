@@ -132,5 +132,9 @@
 - [x] 阶段 1 引入依赖
 - [x] 阶段 2 纯 AST 等价替换（78 测试全过，无断言需调整）
 - [x] 阶段 3 接入 SymbolSolver（开关默认关闭，容错回退，实测见上）
-- [ ] 阶段 4 （可选）精确连边
-- [ ] 阶段 5 入口层迁移 + 修 bug
+- [~] 阶段 4 （可选）精确连边 —— 跳过：实测显示无 classpath 下增量收益有限
+- [x] 阶段 5 HttpEndpointScanner 迁 JavaParser + 修 3 类 bug（相对路径 / 注释污染 / 内部类，83 测试全过）
+
+> 备注：`ServletEntryPointDiscoverer` 与 `AsyncEntryPointDiscoverer` 仍为正则 + 共享
+> `HttpAnnotationParser`，存在同类潜在缺陷（注释污染 className 等），但不在本次 bug
+> 范围内，未改动；如需可作后续项。
