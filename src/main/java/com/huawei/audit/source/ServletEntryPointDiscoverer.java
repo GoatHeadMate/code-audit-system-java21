@@ -5,7 +5,10 @@ import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.RecordDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.huawei.audit.analysis.EntryPointDiscoverer;
@@ -17,10 +20,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 public class ServletEntryPointDiscoverer implements EntryPointDiscoverer {
+    private static final Logger log =
+            LoggerFactory.getLogger(ServletEntryPointDiscoverer.class);
     private static final Pattern IMPLBASE_SUFFIX = Pattern.compile("\\w+ImplBase");
     private static final Set<String> SERVLET_METHODS = Set.of(
             "doGet", "doPost", "doPut", "doDelete", "doPatch", "service"
@@ -83,31 +90,48 @@ public class ServletEntryPointDiscoverer implements EntryPointDiscoverer {
         ParseResult<CompilationUnit> parsed;
         try {
             parsed = parser.parse(file);
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            log.warn("入口扫描跳过无法解析的文件 {}: {}",
+                    relativePath, exception.getMessage());
             return;
         }
-        parsed.getResult().ifPresent(unit -> {
-            boolean dubboImport = hasDubboImport(unit);
-            for (ClassOrInterfaceDeclaration type
-                    : unit.findAll(ClassOrInterfaceDeclaration.class)) {
-                scanType(type, relativePath, dubboImport, result);
-            }
-        });
+        if (parsed.getResult().isEmpty()) {
+            log.warn("入口扫描跳过解析失败的文件 {}（{} 个语法问题）",
+                    relativePath, parsed.getProblems().size());
+            return;
+        }
+        CompilationUnit unit = parsed.getResult().get();
+        boolean dubboImport = hasDubboImport(unit);
+        for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
+            scanType(type, relativePath, dubboImport, result);
+        }
     }
 
     private void scanType(
-            ClassOrInterfaceDeclaration type,
+            TypeDeclaration<?> type,
             String relativePath,
             boolean dubboImport,
             List<DiscoveredEntryPoint> result
     ) {
         String className = type.getNameAsString();
-        String extendsName = type.getExtendedTypes().isEmpty()
-                ? ""
-                : type.getExtendedTypes().get(0).getNameAsString();
-        List<String> implementsNames = type.getImplementedTypes().stream()
-                .map(implemented -> implemented.getNameAsString())
-                .toList();
+        String extendsName = "";
+        List<String> implementsNames = List.of();
+        if (type instanceof ClassOrInterfaceDeclaration declaration) {
+            extendsName = declaration.getExtendedTypes().isEmpty()
+                    ? ""
+                    : declaration.getExtendedTypes().get(0).getNameAsString();
+            implementsNames = declaration.getImplementedTypes().stream()
+                    .map(implemented -> implemented.getNameAsString())
+                    .toList();
+        } else if (type instanceof RecordDeclaration recordType) {
+            implementsNames = recordType.getImplementedTypes().stream()
+                    .map(implemented -> implemented.getNameAsString())
+                    .toList();
+        } else if (type instanceof EnumDeclaration enumType) {
+            implementsNames = enumType.getImplementedTypes().stream()
+                    .map(implemented -> implemented.getNameAsString())
+                    .toList();
+        }
         boolean classWebServlet = hasAnnotation(type.getAnnotations(), "WebServlet");
         boolean classServerEndpoint =
                 hasAnnotation(type.getAnnotations(), "ServerEndpoint");

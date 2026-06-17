@@ -143,4 +143,45 @@ class HttpEndpointScannerTest {
                 .extracting(HttpEndpointScanner.Endpoint::httpPath)
                 .containsExactly("/api/ping");
     }
+
+    @Test
+    void discoversRecordController() throws Exception {
+        Files.writeString(tempDir.resolve("RecController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("/rec")
+                record RecController(String service) {
+                    @GetMapping("/ping") String ping() { return ""; }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(HttpEndpointScanner.Endpoint::httpPath)
+                .containsExactly("/rec/ping");
+    }
+
+    @Test
+    void discoversEnumController() throws Exception {
+        Files.writeString(tempDir.resolve("EnumController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("/enum")
+                enum EnumController {
+                    INSTANCE;
+
+                    @GetMapping("/ping") String ping() { return ""; }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(HttpEndpointScanner.Endpoint::httpPath)
+                .containsExactly("/enum/ping");
+    }
+
 }

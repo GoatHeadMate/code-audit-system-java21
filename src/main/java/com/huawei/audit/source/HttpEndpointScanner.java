@@ -4,8 +4,8 @@ import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
-import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.ArrayInitializerExpr;
 import com.github.javaparser.ast.expr.Expression;
@@ -24,10 +24,14 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 public class HttpEndpointScanner implements EntryPointDiscoverer {
+    private static final Logger log =
+            LoggerFactory.getLogger(HttpEndpointScanner.class);
     private static final Set<String> HTTP_ANNOTATIONS = Set.of(
             "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
             "DeleteMapping", "PatchMapping", "GET", "POST", "PUT",
@@ -115,18 +119,23 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
         ParseResult<CompilationUnit> result;
         try {
             result = parser.parse(file);
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            log.warn("入口扫描跳过无法解析的文件 {}: {}",
+                    relativePath, exception.getMessage());
             return;
         }
-        result.getResult().ifPresent(unit -> {
+        if (result.getResult().isEmpty()) {
+            log.warn("入口扫描跳过解析失败的文件 {}（{} 个语法问题）",
+                    relativePath, result.getProblems().size());
+        } else {
+            CompilationUnit unit = result.getResult().get();
             String framework = detectFramework(unit);
-            // findAll visits nested classes independently, so each type keeps
-            // its own class-level mapping (no inner-class path bleed).
-            for (ClassOrInterfaceDeclaration type
-                    : unit.findAll(ClassOrInterfaceDeclaration.class)) {
+            // findAll covers class/interface/record/enum and nested types, each
+            // keeping its own class-level mapping (no inner-class path bleed).
+            for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
                 collectEndpoints(type, relativePath, framework, endpoints);
             }
-        });
+        }
         scanHints(file, relativePath, hints);
     }
 
@@ -142,7 +151,7 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
     }
 
     private void collectEndpoints(
-            ClassOrInterfaceDeclaration type,
+            TypeDeclaration<?> type,
             String relativePath,
             String fileFramework,
             List<Endpoint> endpoints
@@ -189,7 +198,7 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
         }
     }
 
-    private List<String> actuatorClassPaths(ClassOrInterfaceDeclaration type) {
+    private List<String> actuatorClassPaths(TypeDeclaration<?> type) {
         List<String> ids = stringValues(type.getAnnotations(), ACTUATOR_ANNOTATIONS);
         if (ids.isEmpty()) {
             return List.of("/actuator");
