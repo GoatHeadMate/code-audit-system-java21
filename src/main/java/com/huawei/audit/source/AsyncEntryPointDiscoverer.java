@@ -18,10 +18,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 public class AsyncEntryPointDiscoverer implements EntryPointDiscoverer {
+    private static final Logger log =
+            LoggerFactory.getLogger(AsyncEntryPointDiscoverer.class);
     private static final Map<String, String> PROTOCOLS = Map.of(
             "Scheduled", "scheduled",
             "KafkaListener", "message",
@@ -70,38 +74,44 @@ public class AsyncEntryPointDiscoverer implements EntryPointDiscoverer {
         ParseResult<CompilationUnit> parsed;
         try {
             parsed = parser.parse(file);
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            log.warn("入口扫描跳过无法解析的文件 {}: {}",
+                    relativePath, exception.getMessage());
             return;
         }
-        parsed.getResult().ifPresent(unit -> {
-            for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
-                String className = type.getNameAsString();
-                for (MethodDeclaration method : type.getMethods()) {
-                    AnnotationExpr trigger = method.getAnnotations().stream()
-                            .filter(annotation -> PROTOCOLS.containsKey(
-                                    simpleName(annotation.getNameAsString())))
-                            .findFirst()
-                            .orElse(null);
-                    if (trigger == null) {
-                        continue;
-                    }
-                    String triggerName = simpleName(trigger.getNameAsString());
-                    result.add(new DiscoveredEntryPoint(
-                            PROTOCOLS.get(triggerName),
-                            List.of(triggerName),
-                            annotationArguments(trigger),
-                            className,
-                            method.getNameAsString(),
-                            relativePath,
-                            method.getBegin().map(position -> position.line).orElse(0),
-                            "spring-async",
-                            securityAnnotations(method.getAnnotations()),
-                            id(),
-                            "HIGH"
-                    ));
+        if (parsed.getResult().isEmpty()) {
+            log.warn("入口扫描跳过解析失败的文件 {}（{} 个语法问题）",
+                    relativePath, parsed.getProblems().size());
+            return;
+        }
+        CompilationUnit unit = parsed.getResult().get();
+        for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
+            String className = type.getNameAsString();
+            for (MethodDeclaration method : type.getMethods()) {
+                AnnotationExpr trigger = method.getAnnotations().stream()
+                        .filter(annotation -> PROTOCOLS.containsKey(
+                                simpleName(annotation.getNameAsString())))
+                        .findFirst()
+                        .orElse(null);
+                if (trigger == null) {
+                    continue;
                 }
+                String triggerName = simpleName(trigger.getNameAsString());
+                result.add(new DiscoveredEntryPoint(
+                        PROTOCOLS.get(triggerName),
+                        List.of(triggerName),
+                        annotationArguments(trigger),
+                        className,
+                        method.getNameAsString(),
+                        relativePath,
+                        method.getBegin().map(position -> position.line).orElse(0),
+                        "spring-async",
+                        securityAnnotations(method.getAnnotations()),
+                        id(),
+                        "HIGH"
+                ));
             }
-        });
+        }
     }
 
     private String annotationArguments(AnnotationExpr annotation) {

@@ -4,12 +4,18 @@ import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ast.CompilationUnit;
-import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
+import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AnnotationExpr;
 import com.github.javaparser.ast.expr.ArrayInitializerExpr;
+import com.github.javaparser.ast.expr.BinaryExpr;
+import com.github.javaparser.ast.expr.EnclosedExpr;
 import com.github.javaparser.ast.expr.Expression;
+import com.github.javaparser.ast.expr.FieldAccessExpr;
 import com.github.javaparser.ast.expr.MemberValuePair;
+import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.expr.NormalAnnotationExpr;
 import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
 import com.github.javaparser.ast.expr.StringLiteralExpr;
@@ -18,16 +24,23 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 public class HttpEndpointScanner implements EntryPointDiscoverer {
+    private static final Logger log =
+            LoggerFactory.getLogger(HttpEndpointScanner.class);
     private static final Set<String> HTTP_ANNOTATIONS = Set.of(
             "RequestMapping", "GetMapping", "PostMapping", "PutMapping",
             "DeleteMapping", "PatchMapping", "GET", "POST", "PUT",
@@ -115,18 +128,24 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
         ParseResult<CompilationUnit> result;
         try {
             result = parser.parse(file);
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            log.warn("入口扫描跳过无法解析的文件 {}: {}",
+                    relativePath, exception.getMessage());
             return;
         }
-        result.getResult().ifPresent(unit -> {
+        if (result.getResult().isEmpty()) {
+            log.warn("入口扫描跳过解析失败的文件 {}（{} 个语法问题）",
+                    relativePath, result.getProblems().size());
+        } else {
+            CompilationUnit unit = result.getResult().get();
             String framework = detectFramework(unit);
-            // findAll visits nested classes independently, so each type keeps
-            // its own class-level mapping (no inner-class path bleed).
-            for (ClassOrInterfaceDeclaration type
-                    : unit.findAll(ClassOrInterfaceDeclaration.class)) {
-                collectEndpoints(type, relativePath, framework, endpoints);
+            Map<String, String> constants = stringConstants(unit);
+            // findAll covers class/interface/record/enum and nested types, each
+            // keeping its own class-level mapping (no inner-class path bleed).
+            for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
+                collectEndpoints(type, relativePath, framework, constants, endpoints);
             }
-        });
+        }
         scanHints(file, relativePath, hints);
     }
 
@@ -142,17 +161,19 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
     }
 
     private void collectEndpoints(
-            ClassOrInterfaceDeclaration type,
+            TypeDeclaration<?> type,
             String relativePath,
             String fileFramework,
+            Map<String, String> constants,
             List<Endpoint> endpoints
     ) {
         String className = type.getNameAsString();
+        Map<String, String> scopedConstants = scopedConstants(type, constants);
         boolean actuator = hasAnyAnnotation(type.getAnnotations(), ACTUATOR_ANNOTATIONS);
         String framework = actuator ? "spring-actuator" : fileFramework;
         List<String> classPaths = actuator
-                ? actuatorClassPaths(type)
-                : pathsOf(type.getAnnotations(), CLASS_PATH_ANNOTATIONS);
+                ? actuatorClassPaths(type, scopedConstants)
+                : pathsOf(type.getAnnotations(), CLASS_PATH_ANNOTATIONS, scopedConstants);
 
         for (MethodDeclaration method : type.getMethods()) {
             if (!hasAnyAnnotation(method.getAnnotations(), HTTP_ANNOTATIONS)) {
@@ -162,7 +183,7 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
             int startLine = method.getBegin().map(position -> position.line).orElse(0);
             List<String> methods = httpMethods(method.getAnnotations());
             List<String> methodPaths = pathsOf(
-                    method.getAnnotations(), METHOD_PATH_ANNOTATIONS
+                    method.getAnnotations(), METHOD_PATH_ANNOTATIONS, scopedConstants
             );
             List<String> security = securityAnnotations(method.getAnnotations());
             List<String> annotationTexts = method.getAnnotations().stream()
@@ -189,8 +210,15 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
         }
     }
 
-    private List<String> actuatorClassPaths(ClassOrInterfaceDeclaration type) {
-        List<String> ids = stringValues(type.getAnnotations(), ACTUATOR_ANNOTATIONS);
+    private List<String> actuatorClassPaths(
+            TypeDeclaration<?> type,
+            Map<String, String> constants
+    ) {
+        List<String> ids = stringValues(
+                type.getAnnotations(),
+                ACTUATOR_ANNOTATIONS,
+                constants
+        );
         if (ids.isEmpty()) {
             return List.of("/actuator");
         }
@@ -230,12 +258,13 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
      */
     private List<String> pathsOf(
             List<AnnotationExpr> annotations,
-            Set<String> acceptedNames
+            Set<String> acceptedNames,
+            Map<String, String> constants
     ) {
         LinkedHashSet<String> paths = new LinkedHashSet<>();
         for (AnnotationExpr annotation : annotations) {
             if (acceptedNames.contains(simpleName(annotation.getNameAsString()))) {
-                paths.addAll(pathMemberStrings(annotation));
+                paths.addAll(pathMemberStrings(annotation, constants));
             }
         }
         return paths.isEmpty() ? List.of("") : List.copyOf(paths);
@@ -243,12 +272,13 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
 
     private List<String> stringValues(
             List<AnnotationExpr> annotations,
-            Set<String> acceptedNames
+            Set<String> acceptedNames,
+            Map<String, String> constants
     ) {
         LinkedHashSet<String> values = new LinkedHashSet<>();
         for (AnnotationExpr annotation : annotations) {
             if (acceptedNames.contains(simpleName(annotation.getNameAsString()))) {
-                values.addAll(allMemberStrings(annotation));
+                values.addAll(allMemberStrings(annotation, constants));
             }
         }
         return List.copyOf(values);
@@ -256,41 +286,132 @@ public class HttpEndpointScanner implements EntryPointDiscoverer {
 
     // Actuator ids live in non-path members (e.g. @Endpoint(id = "admin")), so
     // collect string literals from every member, not just value/path.
-    private List<String> allMemberStrings(AnnotationExpr annotation) {
+    private List<String> allMemberStrings(
+            AnnotationExpr annotation,
+            Map<String, String> constants
+    ) {
         List<String> values = new ArrayList<>();
         if (annotation instanceof SingleMemberAnnotationExpr single) {
-            collectStrings(single.getMemberValue(), values);
+            collectStrings(single.getMemberValue(), values, constants);
         } else if (annotation instanceof NormalAnnotationExpr normal) {
             for (MemberValuePair pair : normal.getPairs()) {
-                collectStrings(pair.getValue(), values);
+                collectStrings(pair.getValue(), values, constants);
             }
         }
         return values;
     }
 
-    private List<String> pathMemberStrings(AnnotationExpr annotation) {
+    private List<String> pathMemberStrings(
+            AnnotationExpr annotation,
+            Map<String, String> constants
+    ) {
         List<String> values = new ArrayList<>();
         if (annotation instanceof SingleMemberAnnotationExpr single) {
-            collectStrings(single.getMemberValue(), values);
+            collectStrings(single.getMemberValue(), values, constants);
         } else if (annotation instanceof NormalAnnotationExpr normal) {
             for (MemberValuePair pair : normal.getPairs()) {
                 if (PATH_MEMBERS.contains(pair.getNameAsString())) {
-                    collectStrings(pair.getValue(), values);
+                    collectStrings(pair.getValue(), values, constants);
                 }
             }
         }
         return values;
     }
 
-    private void collectStrings(Expression expression, List<String> out) {
+    private void collectStrings(
+            Expression expression,
+            List<String> out,
+            Map<String, String> constants
+    ) {
         if (expression instanceof StringLiteralExpr literal) {
             out.add(literal.getValue());
         } else if (expression instanceof ArrayInitializerExpr array) {
-            // Cross-class constants resolve to nothing here (pure AST); the
-            // endpoint is still emitted with the remaining segments rather
-            // than dropped.
-            array.getValues().forEach(value -> collectStrings(value, out));
+            array.getValues().forEach(value ->
+                    collectStrings(value, out, constants));
+        } else {
+            constantString(expression, constants).ifPresent(out::add);
         }
+    }
+
+    private Map<String, String> stringConstants(CompilationUnit unit) {
+        Map<String, Expression> expressions = new LinkedHashMap<>();
+        for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
+            String typeName = type.getNameAsString();
+            for (FieldDeclaration field : type.getFields()) {
+                if (!field.isFinal()) {
+                    continue;
+                }
+                for (VariableDeclarator variable : field.getVariables()) {
+                    if (!"String".equals(simpleName(variable.getType().asString()))
+                            || variable.getInitializer().isEmpty()) {
+                        continue;
+                    }
+                    String name = variable.getNameAsString();
+                    Expression initializer = variable.getInitializer().get();
+                    expressions.putIfAbsent(name, initializer);
+                    expressions.put(typeName + "." + name, initializer);
+                }
+            }
+        }
+
+        Map<String, String> constants = new LinkedHashMap<>();
+        for (int pass = 0; pass < expressions.size(); pass++) {
+            int before = constants.size();
+            for (Map.Entry<String, Expression> entry : expressions.entrySet()) {
+                if (constants.containsKey(entry.getKey())) {
+                    continue;
+                }
+                constantString(entry.getValue(), constants)
+                        .ifPresent(value -> constants.put(entry.getKey(), value));
+            }
+            if (constants.size() == before) {
+                break;
+            }
+        }
+        return Map.copyOf(constants);
+    }
+
+    private Map<String, String> scopedConstants(
+            TypeDeclaration<?> type,
+            Map<String, String> constants
+    ) {
+        Map<String, String> scoped = new LinkedHashMap<>(constants);
+        String prefix = type.getNameAsString() + ".";
+        constants.forEach((key, value) -> {
+            if (key.startsWith(prefix)) {
+                scoped.put(key.substring(prefix.length()), value);
+            }
+        });
+        return Map.copyOf(scoped);
+    }
+
+    private Optional<String> constantString(
+            Expression expression,
+            Map<String, String> constants
+    ) {
+        if (expression instanceof StringLiteralExpr literal) {
+            return Optional.of(literal.getValue());
+        }
+        if (expression instanceof NameExpr name) {
+            return Optional.ofNullable(constants.get(name.getNameAsString()));
+        }
+        if (expression instanceof FieldAccessExpr fieldAccess) {
+            String qualified = fieldAccess.getScope() + "."
+                    + fieldAccess.getNameAsString();
+            return Optional.ofNullable(constants.get(qualified));
+        }
+        if (expression instanceof EnclosedExpr enclosed) {
+            return constantString(enclosed.getInner(), constants);
+        }
+        if (expression instanceof BinaryExpr binary
+                && binary.getOperator() == BinaryExpr.Operator.PLUS) {
+            Optional<String> left = constantString(binary.getLeft(), constants);
+            Optional<String> right = constantString(binary.getRight(), constants);
+            if (left.isPresent() && right.isPresent()) {
+                return Optional.of(left.get() + right.get());
+            }
+        }
+        return Optional.empty();
     }
 
     private List<String> securityAnnotations(List<AnnotationExpr> annotations) {

@@ -143,4 +143,76 @@ class HttpEndpointScannerTest {
                 .extracting(HttpEndpointScanner.Endpoint::httpPath)
                 .containsExactly("/api/ping");
     }
+
+    @Test
+    void discoversRecordController() throws Exception {
+        Files.writeString(tempDir.resolve("RecController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("/rec")
+                record RecController(String service) {
+                    @GetMapping("/ping") String ping() { return ""; }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(HttpEndpointScanner.Endpoint::httpPath)
+                .containsExactly("/rec/ping");
+    }
+
+    @Test
+    void discoversEnumController() throws Exception {
+        Files.writeString(tempDir.resolve("EnumController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("/enum")
+                enum EnumController {
+                    INSTANCE;
+
+                    @GetMapping("/ping") String ping() { return ""; }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(HttpEndpointScanner.Endpoint::httpPath)
+                .containsExactly("/enum/ping");
+    }
+
+    @Test
+    void resolvesSameFileConstantsInRouteAnnotations() throws Exception {
+        Files.writeString(tempDir.resolve("ConstController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                final class OtherConstants {
+                    static final String RUN = "/wrong";
+                }
+
+                @RestController
+                @RequestMapping(ConstController.BASE)
+                class ConstController {
+                    static final String BASE = "/api";
+                    static final String RUN = "/run";
+
+                    @PostMapping(path = RUN + Constants.EXTRA)
+                    String run() { return ""; }
+                }
+
+                final class Constants {
+                    static final String EXTRA = "/exec";
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(endpoint -> endpoint.httpMethods().getFirst()
+                        + " " + endpoint.httpPath())
+                .containsExactly("POST /api/run/exec");
+    }
 }

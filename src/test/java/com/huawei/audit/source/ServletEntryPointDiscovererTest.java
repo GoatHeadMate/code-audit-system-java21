@@ -136,4 +136,33 @@ class ServletEntryPointDiscovererTest {
                         + entry.operations().getFirst() + " " + entry.methodName())
                 .contains("LIFECYCLE INIT setup", "LIFECYCLE STARTUP run");
     }
+
+    @Test
+    void discoversDubboServiceRecord() throws Exception {
+        var entries = discover("DubRecord.java", """
+                import org.apache.dubbo.config.annotation.DubboService;
+                @DubboService
+                public record DubRecord(String dependency) {
+                    public String greet(String name) { return name; }
+                }
+                """);
+        assertThat(entries)
+                .extracting(entry -> entry.protocol() + " " + entry.methodName())
+                .contains("RPC greet");
+    }
+
+    @Test
+    void discoversLifecycleEnum() throws Exception {
+        var entries = discover("BootEnum.java", """
+                import org.springframework.boot.ApplicationRunner;
+                public enum BootEnum implements ApplicationRunner {
+                    INSTANCE;
+                    public void run(Object args) {}
+                }
+                """);
+        assertThat(entries)
+                .extracting(entry -> entry.protocol() + " "
+                        + entry.operations().getFirst() + " " + entry.methodName())
+                .contains("LIFECYCLE STARTUP run");
+    }
 }
