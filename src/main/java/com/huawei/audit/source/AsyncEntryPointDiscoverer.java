@@ -1,5 +1,14 @@
 package com.huawei.audit.source;
 
+import com.github.javaparser.JavaParser;
+import com.github.javaparser.ParseResult;
+import com.github.javaparser.ParserConfiguration;
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
+import com.github.javaparser.ast.expr.AnnotationExpr;
+import com.github.javaparser.ast.expr.NormalAnnotationExpr;
+import com.github.javaparser.ast.expr.SingleMemberAnnotationExpr;
 import com.huawei.audit.analysis.EntryPointDiscoverer;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -7,18 +16,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
 @Component
 public class AsyncEntryPointDiscoverer implements EntryPointDiscoverer {
-    private static final Pattern CLASS_DECLARATION = Pattern.compile(
-            "\\b(?:class|interface|record)\\s+(\\w+)"
-    );
-    private static final Pattern METHOD_NAME = Pattern.compile(
-            "([A-Za-z_$][\\w$]*)\\s*\\("
-    );
     private static final Map<String, String> PROTOCOLS = Map.of(
             "Scheduled", "scheduled",
             "KafkaListener", "message",
@@ -27,8 +30,12 @@ public class AsyncEntryPointDiscoverer implements EntryPointDiscoverer {
             "EventListener", "event",
             "Async", "async"
     );
+    private static final Set<String> SECURITY_ANNOTATIONS = Set.of(
+            "PreAuthorize", "Secured", "RolesAllowed", "PermitAll", "DenyAll"
+    );
 
-    private final HttpAnnotationParser annotations = new HttpAnnotationParser();
+    private final JavaParser parser = new JavaParser(new ParserConfiguration()
+            .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21));
 
     @Override
     public String id() {
@@ -56,74 +63,68 @@ public class AsyncEntryPointDiscoverer implements EntryPointDiscoverer {
             Path sourceRoot,
             Path file,
             List<DiscoveredEntryPoint> result
-    ) throws IOException {
-        List<String> lines = Files.readAllLines(file);
+    ) {
         String relativePath = sourceRoot.relativize(file)
                 .toString()
                 .replace('\\', '/');
-        String className = "";
-        List<HttpAnnotationParser.AnnotationRef> pending = new ArrayList<>();
-
-        for (int index = 0; index < lines.size(); index++) {
-            String trimmed = lines.get(index).strip();
-            if (trimmed.startsWith("@")) {
-                HttpAnnotationParser.AnnotationBlock block =
-                        annotations.annotationBlock(lines, index);
-                pending.addAll(annotations.parse(block.text()));
-                index = block.endLine();
-                continue;
-            }
-            Matcher classMatcher = CLASS_DECLARATION.matcher(trimmed);
-            if (classMatcher.find()) {
-                className = classMatcher.group(1);
-                pending.clear();
-                continue;
-            }
-            if (!pending.isEmpty() && looksLikeMethod(trimmed)) {
-                HttpAnnotationParser.AnnotationRef trigger = pending.stream()
-                        .filter(annotation ->
-                                PROTOCOLS.containsKey(annotation.name()))
-                        .findFirst()
-                        .orElse(null);
-                if (trigger != null) {
+        ParseResult<CompilationUnit> parsed;
+        try {
+            parsed = parser.parse(file);
+        } catch (Exception ignored) {
+            return;
+        }
+        parsed.getResult().ifPresent(unit -> {
+            for (TypeDeclaration<?> type : unit.findAll(TypeDeclaration.class)) {
+                String className = type.getNameAsString();
+                for (MethodDeclaration method : type.getMethods()) {
+                    AnnotationExpr trigger = method.getAnnotations().stream()
+                            .filter(annotation -> PROTOCOLS.containsKey(
+                                    simpleName(annotation.getNameAsString())))
+                            .findFirst()
+                            .orElse(null);
+                    if (trigger == null) {
+                        continue;
+                    }
+                    String triggerName = simpleName(trigger.getNameAsString());
                     result.add(new DiscoveredEntryPoint(
-                            PROTOCOLS.get(trigger.name()),
-                            List.of(trigger.name()),
-                            trigger.arguments(),
+                            PROTOCOLS.get(triggerName),
+                            List.of(triggerName),
+                            annotationArguments(trigger),
                             className,
-                            methodName(trimmed),
+                            method.getNameAsString(),
                             relativePath,
-                            index + 1,
+                            method.getBegin().map(position -> position.line).orElse(0),
                             "spring-async",
-                            annotations.securityAnnotations(pending),
+                            securityAnnotations(method.getAnnotations()),
                             id(),
                             "HIGH"
                     ));
                 }
-                pending.clear();
-            } else if (!trimmed.isBlank()
-                    && !trimmed.startsWith("//")
-                    && !trimmed.startsWith("*")
-                    && !trimmed.startsWith("/*")) {
-                pending.clear();
             }
-        }
+        });
     }
 
-    private boolean looksLikeMethod(String line) {
-        return line.contains("(")
-                && !line.startsWith("if")
-                && !line.startsWith("for")
-                && !line.startsWith("while")
-                && !line.startsWith("switch");
+    private String annotationArguments(AnnotationExpr annotation) {
+        if (annotation instanceof SingleMemberAnnotationExpr single) {
+            return single.getMemberValue().toString();
+        }
+        if (annotation instanceof NormalAnnotationExpr normal) {
+            return normal.getPairs().stream()
+                    .map(Object::toString)
+                    .collect(Collectors.joining(", "));
+        }
+        return "";
     }
 
-    private String methodName(String declaration) {
-        Matcher matcher = METHOD_NAME.matcher(declaration);
-        String result = "";
-        while (matcher.find()) {
-            result = matcher.group(1);
-        }
-        return result;
+    private List<String> securityAnnotations(List<AnnotationExpr> annotations) {
+        return annotations.stream()
+                .map(annotation -> simpleName(annotation.getNameAsString()))
+                .filter(SECURITY_ANNOTATIONS::contains)
+                .toList();
+    }
+
+    private String simpleName(String name) {
+        int separator = name.lastIndexOf('.');
+        return separator >= 0 ? name.substring(separator + 1) : name;
     }
 }

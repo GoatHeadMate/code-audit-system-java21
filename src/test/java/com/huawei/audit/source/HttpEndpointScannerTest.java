@@ -57,4 +57,90 @@ class HttpEndpointScannerTest {
                     assertThat(hint.filePath()).isEqualTo("RoaService.java");
                 });
     }
+
+    @Test
+    void keepsRelativePathsAndExcludesProduces() throws Exception {
+        Files.writeString(tempDir.resolve("RelController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("api")
+                class RelController {
+                    @GetMapping(value = "users", produces = "application/json")
+                    String list() { return ""; }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(endpoint -> endpoint.httpMethods().getFirst()
+                        + " " + endpoint.httpPath())
+                .containsExactly("GET /api/users");
+    }
+
+    @Test
+    void doesNotLetCommentsPolluteClassName() throws Exception {
+        Files.writeString(tempDir.resolve("CommentController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("/c")
+                class CommentController {
+                    // returns the user record for the given interface class
+                    @GetMapping("/u")
+                    String u() { return ""; }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints()).singleElement().satisfies(endpoint -> {
+            assertThat(endpoint.className()).isEqualTo("CommentController");
+            assertThat(endpoint.httpPath()).isEqualTo("/c/u");
+        });
+    }
+
+    @Test
+    void keepsInnerClassMappingsSeparate() throws Exception {
+        Files.writeString(tempDir.resolve("Outer.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                @RequestMapping("/outer")
+                class Outer {
+                    @GetMapping("/a") String a() { return ""; }
+
+                    @RestController
+                    @RequestMapping("/inner")
+                    static class Inner {
+                        @GetMapping("/b") String b() { return ""; }
+                    }
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(HttpEndpointScanner.Endpoint::httpPath)
+                .containsExactlyInAnyOrder("/outer/a", "/inner/b");
+    }
+
+    @Test
+    void discoversInterfaceEndpointsWithoutBody() throws Exception {
+        Files.writeString(tempDir.resolve("Api.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RequestMapping("/api")
+                interface Api {
+                    @GetMapping("/ping") String ping();
+                }
+                """);
+
+        var result = new HttpEndpointScanner().scan(tempDir);
+
+        assertThat(result.endpoints())
+                .extracting(HttpEndpointScanner.Endpoint::httpPath)
+                .containsExactly("/api/ping");
+    }
 }
