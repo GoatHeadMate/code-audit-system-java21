@@ -1,68 +1,120 @@
 # 不安全解析（反序列化 + XXE）判断知识
 
-本类别覆盖两类解析不可信数据格式的风险：对象反序列化和 XML 外部实体注入。
+## Use When
 
----
+Use this skill to validate candidate paths ending in object deserialization,
+dynamic type loading, unsafe JSON/XML/YAML parsing, XML entity resolution, or
+parser factory misconfiguration.
 
-## A. 反序列化漏洞判断规则
+## Candidate Fields That Matter
 
-**① 原生 Java 反序列化（ObjectInputStream.readObject）**
-- HTTP 控制器或 MQ 消费者中 + 无 `ObjectInputFilter` → **CRITICAL**
-- 来源不明 / 文件读取 → **MEDIUM**
-- 即使当前缺少已知 gadget chain，入口点仍应上报——依赖升级可能引入新 gadget
+- `entryPoint`: HTTP body/file/message/source of serialized data.
+- `sink`: parser/deserializer API and line.
+- `methodPath` / `callEdges`: whether the parser configuration object reaches
+  the sink.
+- `taintConfidence` and `sourceClassification`: external bytes/string vs trusted
+  internal config.
+- Dependencies and parser versions where available.
+- Factory/config calls near the sink or in helper methods.
 
-**② JSON 危险配置**
-- Fastjson `setAutoTypeSupport(true)` + 接收外部 JSON → **HIGH**
-- Jackson `enableDefaultTyping(OBJECT_AND_NON_CONCRETE)` 或 `activateDefaultTyping` → **HIGH**
-- 默认配置（autoType 未开启）→ 安全
+## Common Verdict Rules
 
-**③ XML 反序列化**
-- `XMLDecoder.readObject()` → **CRITICAL**
-- `XStream.fromXML()` 未调用 `setupDefaultSecurity()` → **HIGH**
-- JAXB unmarshal 输入来自 HTTP → **MEDIUM**
+- Confirm only when source/reachability, propagation, parser/deserializer sink,
+  and missing or bypassed protection are visible.
+- Downgrade when production profile, route reachability, trust boundary, parser
+  version, or runtime configuration is ambiguous.
+- Mark NEEDS_REVIEW when the parser sink is sensitive but type binding, factory
+  configuration, version, or trust-boundary evidence is incomplete.
+- Suppress only when effective protection is visible and applies before the
+  parser/deserializer sink.
 
-**④ YAML 反序列化**
-- SnakeYAML `Yaml.load()` 接收外部输入 → **HIGH**（可构造任意对象）
-- `Yaml.loadAs(input, SafeType.class)` 仍可能危险
+Effective protection must configure the actual parser/factory/mapper instance
+used by the sink, cover the actual input format and target type, and remain
+effective after helper indirection, polymorphic type handling, factory wrapping,
+entity resolver replacement, or dispatch indirection.
 
-**⑤ Serializable 接口直接暴露**
-- Controller 直接接收 Serializable 子类参数 → **MEDIUM**
+For stored or second-order candidates, confirm field correspondence: the
+externally written field, DB column, mapper property, cache key, serialized
+property, or config key must be the same value later read and used by the sink.
+Repository/entity identity alone is supporting evidence.
 
-### 反序列化验证要点
+## Deserialization Conditions
 
-- 沿候选路径检查 NATIVE_DESERIALIZATION / DYNAMIC_LOADING sink
-- 检查是否有 `ObjectInputFilter` / `resolveClass` 白名单子类
-- 对 JSON/XML 库检查全局配置（可能在配置类中而非调用点）
-- 用 Grep 搜索 `enableDefaultTyping`、`autoType`、`XStream` 的安全配置
+| Condition | Verdict | Severity |
+|---|---|---|
+| External data reaches `ObjectInputStream.readObject()` without `ObjectInputFilter` or class allowlist | Confirm | CRITICAL |
+| Native deserialization source is file/cache/message of unclear trust | Confirm | MEDIUM |
+| `XMLDecoder.readObject()` receives external data | Confirm | CRITICAL |
+| XStream `fromXML()` without `setupDefaultSecurity()`/type allowlist | Confirm | HIGH |
+| Fastjson AutoType is enabled for external JSON | Confirm | HIGH |
+| Jackson default typing is enabled for external polymorphic input | Confirm | HIGH |
+| SnakeYAML `Yaml.load()` receives external data with arbitrary object construction possible | Confirm | HIGH |
+| Parser is configured with strict allowed target type and no polymorphic type control | Suppress | — |
 
-`rule_id` 命名：`deser-native`、`deser-json`、`deser-xml`、`deser-yaml`、`deser-api`。
+Lack of a visible gadget chain does not suppress unsafe native deserialization
+when untrusted data reaches object construction. It may reduce confidence if
+dependencies are minimal and no dangerous type surface is visible.
 
----
+Jackson is dangerous when external input can control polymorphic type metadata
+through default typing, `@JsonTypeInfo`, or permissive subtype validators.
+Binding to a fixed DTO without polymorphic type control should normally suppress.
 
-## B. XXE（XML 外部实体注入）判断知识
+Fastjson findings should cite AutoType state, parser feature configuration,
+version evidence when available, and whether attacker input can control type
+metadata such as `@type`.
 
-XML 解析器未禁用外部实体时，攻击者可读取任意文件、发起 SSRF 或 DoS。
+## XXE Conditions
 
-**安全配置（存在任意一项即视为安全）**：
-- `factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)`
-- `factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)`
-- `factory.setProperty(XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES, false)`
-- `factory.setProperty(XMLInputFactory.SUPPORT_DTD, false)`
+| Condition | Verdict | Severity |
+|---|---|---|
+| External XML reaches parser and DTD/external entities are not disabled | Confirm | CRITICAL |
+| Parser factory lacks secure features in a public endpoint | Confirm | HIGH |
+| Parser factory lacks secure features only for internal trusted config | Downgrade | MEDIUM/LOW |
+| DTD and external entities are disabled before parsing | Suppress | — |
 
-### XXE 判断规则
+Secure XML evidence includes one or more effective controls such as:
 
-| 场景 | 判定 | 严重度 |
-|------|------|--------|
-| 候选路径终点为 XML 解析 + 用户可控输入 + 无安全配置 | **漏洞** | CRITICAL |
-| XML 解析工厂未配置安全特性 + 在 REST 控制器/公开端点中 | **漏洞** | HIGH |
-| XML 解析工厂未配置安全特性 + 仅在内部处理（无 HTTP 入口）| **漏洞** | MEDIUM |
-| 工厂已配置上述任一安全特性 | 安全 | — |
+- `disallow-doctype-decl=true`
+- `XMLConstants.FEATURE_SECURE_PROCESSING=true` when sufficient for the parser
+- `XMLInputFactory.IS_SUPPORTING_EXTERNAL_ENTITIES=false`
+- `XMLInputFactory.SUPPORT_DTD=false`
+- `ACCESS_EXTERNAL_DTD` and `ACCESS_EXTERNAL_SCHEMA` restricted to empty values
 
-### XXE 验证要点
+For XML parsers, check the specific factory type: `DocumentBuilderFactory`,
+`SAXParserFactory`, `XMLInputFactory`, `TransformerFactory`, `SchemaFactory`,
+JAXB, dom4j, JDOM, and `SAXReader`. Secure features must be applied to the
+actual factory instance used by the sink.
 
-- 沿候选路径检查 XML_PARSE sink：定位 XML 解析工厂的创建代码
-- 在工厂创建到 `parse()` 调用之间搜索安全配置（`setFeature`/`setProperty`）
-- 检查工厂是否通过工具类创建（类名含 Secure/Safe/XXEUtil → 可能已配置安全）
-- 注意：同一类中工厂的安全配置可能在另一个方法中设置
+## False Positive Suppressors
 
-`rule_id` 命名：`xxe-taint`、`xxe-unsafe-factory`。
+Do not report when:
+
+- Input is fixed server-side data, not external or stored attacker-controlled
+  content.
+- Deserialization target is a final/simple DTO without polymorphic type control
+  and the library configuration prevents arbitrary type resolution.
+- A class allowlist/filter is enforced before object construction.
+- XML parser helper is known to configure secure features before every parse.
+- A secure helper returns or configures the same parser/factory object actually
+  used by the parse call.
+
+## Severity And Confidence
+
+- CRITICAL/HIGH: external bytes/XML reach native deserialization, XMLDecoder, or
+  XXE-capable parser without visible protection.
+- HIGH/HIGH: dangerous JSON/YAML/XML library setting is enabled for external data.
+- MEDIUM/MEDIUM: trust boundary is ambiguous or parser is internal-only.
+- Suppress: strong filter/allowlist/secure parser configuration is visible.
+
+## Evidence Requirements
+
+A valid finding should cite:
+
+- The external data source.
+- The parser/deserializer construction and sink.
+- The missing or insufficient safety configuration.
+- For library-specific issues, the dangerous setting or absence of allowlist.
+- Suppressors considered and why they do not apply.
+
+`rule_id` values: `deser-native`, `deser-json`, `deser-xml`, `deser-yaml`,
+`deser-api`, `xxe-taint`, `xxe-unsafe-factory`.

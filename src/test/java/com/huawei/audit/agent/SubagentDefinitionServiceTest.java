@@ -27,9 +27,11 @@ class SubagentDefinitionServiceTest {
         assertThat(skill).isRegularFile();
         assertThat(Files.readString(skill))
                 .contains("name: audit-sql-injection")
-                .contains("description:")
-                .contains("White-Box Judgment Rules")
+                .contains("description: >")
+                .contains("Use this skill to validate candidate paths whose sink category is SQL execution")
                 .contains("# SQL 注入判断知识");
+        assertThat(Files.readString(skill))
+                .doesNotContain("# White-Box Judgment Rules");
         assertThat(result).containsEntry("sql_injection", "audit-sql-injection");
         assertThat(tempDir.resolve(".claude/agents")).doesNotExist();
         assertThat(tempDir.resolve("instructions")).doesNotExist();

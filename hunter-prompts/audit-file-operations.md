@@ -1,56 +1,114 @@
 # 文件操作漏洞（文件上传 + 路径遍历）判断知识
 
-本类别覆盖两类文件系统操作的风险：恶意文件上传和路径遍历。
+## Use When
 
----
+Use this skill to validate candidate paths involving file upload, file read/write,
+archive extraction, filesystem path construction, or user-controlled filenames.
 
-## A. 文件上传漏洞判断知识
+## Candidate Fields That Matter
 
-核心风险：攻击者上传可执行文件（WebShell）到服务器可访问目录，进而执行任意代码。
+- `entryPoint`: multipart, filename, path, export/import, or archive input.
+- `sink`: file read/write/copy/delete/move, archive extraction, or storage API.
+- `methodPath` / `callEdges`: whether path validation happens before the sink.
+- `taintConfidence` and `sourceClassification`: which path segment or filename
+  is controlled.
+- Nearby validation: canonicalization, root-prefix checks, extension allowlists,
+  MIME/content checks, storage location, and generated server-side names.
 
-### 文件上传判断规则
+## Common Verdict Rules
 
-| 场景 | 判定 | 严重度 |
-|------|------|--------|
-| 无任何文件类型校验 | **漏洞** | HIGH |
-| 仅有 MIME 校验，无扩展名校验 | **漏洞** | MEDIUM（MIME 可伪造） |
-| 仅有黑名单校验，未使用白名单 | **漏洞** | MEDIUM |
-| 写入路径在 Web 根目录下 | **漏洞** | HIGH |
-| 文件名直接使用用户输入未净化 | **漏洞** | MEDIUM |
-| 三维校验齐全（白名单扩展名 + 内容检测 + 安全路径）| 安全 | — |
+- Confirm only when source/reachability, propagation, filesystem sink/action,
+  and missing or bypassed protection are visible.
+- Downgrade when production profile, route reachability, trust boundary, or
+  runtime storage configuration is ambiguous.
+- Mark NEEDS_REVIEW when the filesystem action is sensitive but validation,
+  storage root, archive handling, or runtime configuration evidence is
+  incomplete.
+- Suppress only when effective protection is visible and applies before the
+  filesystem sink.
 
-### 文件上传验证要点
+Effective protection must run after final path construction and before the sink,
+cover the actual filename/path/archive entry, use canonical/real paths where
+relevant, and remain effective after later decoding, path joins, renames,
+symlink resolution, archive extraction, or dispatch indirection.
 
-- 候选路径的入口通常是 `MultipartFile` 参数或 `@RequestPart`
-- 沿调用链检查：扩展名校验、MIME 校验、文件内容检测（magic bytes）
-- 检查文件写入的目标路径是否在 Web 可访问目录下
-- 大小写变体（`.JSP`）、双扩展名（`.jpg.jsp`）可绕过黑名单
-- 仅靠前端 JavaScript 校验无效
-- 检查 `getOriginalFilename()` 是否被直接用于路径拼接（同时有路径遍历风险）
+For stored or second-order candidates, confirm field correspondence: the
+externally written field, DB column, mapper property, cache key, serialized
+property, or config key must be the same value later read and used by the sink.
+Repository/entity identity alone is supporting evidence.
 
-`rule_id` 命名：`upload-no-validation`、`upload-mime-only`、`upload-web-root`、`upload-path-traversal`。
+## File Upload Conditions
 
----
+| Condition | Verdict | Severity |
+|---|---|---|
+| Uploaded file type is unchecked and stored in a reachable/executable location | Confirm | HIGH |
+| Only MIME type is checked | Confirm when file can influence extension/content | MEDIUM |
+| Only blacklist extension filtering is used | Confirm | MEDIUM |
+| Original filename is used in path construction without safe normalization | Confirm | MEDIUM/HIGH |
+| File is written under web root or executable plugin/script directory | Confirm | HIGH |
+| Extension allowlist, content validation, generated name, and safe storage are all present | Suppress | — |
 
-## B. 路径遍历判断知识
+Upload impact is higher when the target stack can execute uploaded content
+directly, loads plugins/scripts from the upload directory, or later serves files
+with attacker-controlled content type.
 
-### 路径遍历判断规则
+## Path Traversal Conditions
 
-| 场景 | 判定 | 严重度 |
-|------|------|--------|
-| 用户输入直接作为文件路径 + 无规范化 | **漏洞** | HIGH |
-| 有 `normalize()` 但未校验前缀/根目录 | **漏洞** | MEDIUM |
-| Zip 解压条目名未校验直接写入 | **漏洞** | HIGH（Zip Slip） |
-| 路径拼接有黑名单过滤（可被编码绕过） | **漏洞** | MEDIUM |
-| 有 `getCanonicalPath()` + 前缀白名单 | 安全 | — |
-| 文件路径完全硬编码 | 安全 | — |
+| Condition | Verdict | Severity |
+|---|---|---|
+| Request value directly controls filesystem path without canonical root check | Confirm | HIGH |
+| `Path.normalize()` exists but no root-prefix/canonical comparison follows | Confirm | MEDIUM |
+| Archive entry name is extracted without destination containment check | Confirm | HIGH |
+| Blacklist filters `../` but misses encoding, Unicode, separators, or symlinks | Confirm | MEDIUM |
+| `getCanonicalPath()`/`toRealPath()` plus strict root-prefix allowlist is present | Suppress | — |
 
-### 路径遍历验证要点
+Path traversal can appear in downloads, template loading, export/import, ZIP/TAR
+extraction, log viewing, attachment preview, and `MultipartFile.getOriginalFilename()`.
 
-- 沿候选路径检查 FILE_WRITE sink：入口参数如何传入文件路径
-- `../` 有多种编码绕过方式：URL 编码 `%2e%2e%2f`、Unicode、双编码 `%252e%252e%252f`
-- `Path.normalize()` 不等于安全——必须配合前缀校验
-- 注意 Zip/Tar 解压场景：`ZipEntry.getName()` 可包含 `../` 前缀
-- 检查 Spring `MultipartFile.getOriginalFilename()` 是否被直接用于文件写入路径
+Path traversal validation must handle Unix separators, Windows separators, drive
+letters, UNC paths, absolute paths, encoded separators, double decoding, Unicode
+normalization, and symlink resolution when relevant.
 
-`rule_id` 命名：`pathtrav-taint`、`pathtrav-no-canon`、`pathtrav-zipslip`。
+Archive extraction must reject absolute paths, `..` segments after
+normalization, Windows drive/UNC paths, symlink entries that escape the
+destination, and hardlink entries when the archive format supports them.
+
+Canonical containment checks should happen after final path construction and
+immediately before the filesystem sink. Checks performed before later path
+joins, renames, symlink creation, or extraction are insufficient.
+
+## False Positive Suppressors
+
+Do not report when:
+
+- Server generates the final filename and ignores attacker path components.
+- Canonical/real path is checked to stay under a trusted base directory after
+  normalization and symlink resolution when relevant.
+- Archive extraction normalizes each entry and verifies destination containment.
+- Upload storage is outside executable/web roots and retrieval enforces content
+  disposition plus safe content type.
+- Extension allowlist is case-insensitive and based on the final extension after
+  decoding and normalization.
+
+## Severity And Confidence
+
+- HIGH/HIGH: attacker-controlled path reaches read/write/delete/extract sink
+  without containment validation.
+- HIGH/MEDIUM: upload to executable/reachable location with weak type checks.
+- MEDIUM/MEDIUM: partial filename control or blacklist-only filtering.
+- Suppress: generated names, strict allowlists, and canonical root checks are
+  all visible.
+
+## Evidence Requirements
+
+A valid finding should cite:
+
+- The user-controlled path, filename, multipart field, or archive entry.
+- Path construction and validation steps.
+- The filesystem sink and target directory.
+- Why canonicalization, extension, content, or root checks are absent or weak.
+- Suppressors considered and why they do not apply.
+
+`rule_id` values: `upload-no-validation`, `upload-mime-only`,
+`upload-web-root`, `upload-path-traversal`, `pathtrav-taint`,
+`pathtrav-no-canon`, `pathtrav-zipslip`, `pathtrav-symlink`.

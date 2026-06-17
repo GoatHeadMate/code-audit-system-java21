@@ -56,29 +56,47 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
     private String buildSkill(
             String skillName, String hunter, String specialistKnowledge
     ) {
+        String fallbackDescription = "White-box "
+                + hunter.replace('_', ' ')
+                + " judgment rules. Load when reviewing "
+                + hunter.replace('_', ' ')
+                + " candidate paths before issuing a verdict.";
+        String description = extractUseWhen(specialistKnowledge, fallbackDescription);
         return """
                 ---
                 name: %s
-                description: White-box %s judgment rules — severity thresholds, \
-                confidence, sanitizer and downgrade conditions. Load when reviewing \
-                %s candidate paths before issuing a verdict.
+                description: >
+                %s
                 ---
-
-                # White-Box Judgment Rules: %s
-
-                Apply these category-specific rules to every candidate-path chunk and
-                stored-candidate chunk listed in your task file. Java has already done
-                broad entrypoint, call-edge and sink discovery; your role is the
-                semantic verdict on controllability, sanitizers, dispatch,
-                authentication, authorization, exploit conditions and false positives.
 
                 %s
                 """.formatted(
                 skillName,
-                hunter.replace('_', ' '),
-                hunter.replace('_', ' '),
-                hunter.replace('_', ' '),
+                indentYamlBlock(description),
                 specialistKnowledge.strip()
         );
+    }
+
+    private static String extractUseWhen(String content, String fallback) {
+        String marker = "## Use When";
+        int markerStart = content.indexOf(marker);
+        if (markerStart < 0) {
+            return fallback;
+        }
+        int bodyStart = markerStart + marker.length();
+        int nextSection = content.indexOf("\n## ", bodyStart);
+        String body = nextSection < 0
+                ? content.substring(bodyStart)
+                : content.substring(bodyStart, nextSection);
+        String description = body.strip();
+        return description.isBlank() ? fallback : description;
+    }
+
+    private static String indentYamlBlock(String description) {
+        return description.lines()
+                .map(String::stripTrailing)
+                .map(line -> "                  " + line)
+                .reduce((left, right) -> left + "\n" + right)
+                .orElse("");
     }
 }

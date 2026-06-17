@@ -1,74 +1,120 @@
 # 代码执行（命令注入 + 模板注入）判断知识
 
-本类别覆盖两类 RCE 路径：OS 命令执行和表达式/模板引擎执行。
+## Use When
 
----
+Use this skill to validate candidate paths ending in OS command execution,
+script execution, dynamic expression evaluation, template evaluation, or stored
+second-order execution paths.
 
-## A. 命令注入判断规则
+## Candidate Fields That Matter
 
-**① Runtime.exec(String) 单字符串形式**
-- 候选路径终点为 `Runtime.exec(String)` → **CRITICAL**，confidence ≥ 0.90
-- 底层 shell 直接解析完整命令字符串，无需额外拼接即可注入
+- `entryPoint`: external source, protocol, parameter names, and route.
+- `sink`: command/expression/template API and exact line.
+- `methodPath` / `callEdges`: constructor, callback, interface dispatch, async,
+  scheduled, message, and wrapper method reachability.
+- `taintConfidence`, `taintTrace`, and `sourceClassification`: whether attacker
+  data reaches the executable part of the sink.
+- `storedCandidate`: write path, storage key, read access, execution path, and
+  field correspondence for delayed execution.
 
-**② ProcessBuilder 或 Runtime.exec(String[]) 数组形式**
-- 整个命令或第一个参数可控 → **HIGH**，confidence ≈ 0.85
-- 仅后续参数部分可控 → **MEDIUM**，confidence ≈ 0.65
+## Common Verdict Rules
 
-**③ bash/sh -c 拼接模式**
-- ProcessBuilder 以 `bash -c` / `sh -c` 执行，第三参数为变量或拼接表达式 → **HIGH**，confidence ≈ 0.80
-- 该参数值可追溯到 HTTP 入口 → 升级为 **CRITICAL**
+- Confirm only when source/reachability, propagation, sink/action, and missing
+  or bypassed protection are visible.
+- Downgrade when production profile, route reachability, version, trust boundary,
+  or runtime configuration is ambiguous.
+- Mark NEEDS_REVIEW when the sink/action is sensitive but authorization,
+  validation, or runtime configuration evidence is incomplete.
+- Suppress only when effective protection is visible and applies before the sink.
 
-**④ 模板替换后执行**
-- `String.replace("${...}", value)` 后传入 exec，且 value 来自外部输入 → **HIGH**，confidence ≈ 0.75
+Effective protection must run before command/expression/template execution,
+cover the actual value that reaches the sink, use parsed/canonicalized values
+where relevant, and remain effective after later decoding, template expansion,
+shell wrapping, option parsing, or dispatch indirection.
 
-**④-b 配置模板拼接后执行**
-- YAML/properties 中定义命令模板（含 `${...}`），Java 代码用 String.replace 替换后执行 → **HIGH**，confidence ≈ 0.80
-- 重点检查：TaskUtil.generateQuery() 等通用模板替换工具方法
-- 需追踪模板值来源（配置文件）和替换参数来源（HTTP 输入）
+For stored or second-order candidates, confirm field correspondence: the
+externally written field, DB column, mapper property, cache key, serialized
+property, or config key must be the same value later read and used by the sink.
+Repository/entity identity alone is supporting evidence.
 
-**⑤ 反序列化 gadget 链中的 exec**
-- 反序列化 gadget 类中的 exec → **MEDIUM**，confidence ≈ 0.65
+## Command Execution Conditions
 
-**⑥ 降级条件**
-- 严格白名单（仅允许特定命令集合）→ 安全，不上报
-- 黑名单过滤或字符过滤不完整 → 降一级（CRITICAL→HIGH，HIGH→MEDIUM）
+| Condition | Verdict | Severity |
+|---|---|---|
+| Request-controlled value reaches shell command text such as `sh -c`, `bash -c`, `cmd.exe /c`, or `powershell -Command` | Confirm | CRITICAL |
+| Request-controlled value reaches `Runtime.exec(String)` or `ProcessBuilder` without shell mode | Confirm when it controls executable path, script path, security-sensitive option, or argument with command-specific semantics | HIGH/CRITICAL |
+| Request controls the executable path or first argument of `ProcessBuilder`/`exec(String[])` | Confirm | HIGH |
+| Request controls later arguments only | Confirm when argument changes command semantics | MEDIUM/HIGH |
+| User input can start with `-` or `--` and alter security-sensitive command behavior | Confirm option injection | MEDIUM/HIGH |
+| Template replacement result is executed by shell or command wrapper | Confirm | HIGH/CRITICAL |
+| Stored external value is read by scheduled/message/event flow and reaches command text | Confirm | CRITICAL |
 
-### 命令注入验证要点
+Template replacement is dangerous when attacker input controls executable syntax,
+flags, shell metacharacters, command substitution, file names interpreted by a
+shell, or query strings later embedded into a shell command.
 
-- 沿候选路径逐步检查：入口参数是否被拼接到命令字符串中
-- 检查中间环节是否存在有效净化（白名单校验、参数化执行）
-- 确认调用链中的方法分派是否可达（接口实现、条件分支）
+Java `Runtime.exec(String)` is not automatically shell execution. Treat it as
+HIGH/CRITICAL only when the attacker can choose the executable/script or can
+control command-specific arguments that trigger execution, file overwrite,
+configuration loading, plugin loading, proxying, upload/download targets, or
+other security-sensitive behavior.
 
-`rule_id` 命名：`cmdinj-exec-string`、`cmdinj-exec-args`、`cmdinj-procbuilder`、`cmdinj-bash-concat`、`cmdinj-template-replace`、`cmdinj-config-template`。
+Option injection is valid when user input can begin with `-` or `--` and change
+security-sensitive command behavior such as output path, config file, plugin,
+script, upload target, proxy, or execution mode.
 
----
+## Expression And Template Execution Conditions
 
-## B. SSTI（服务端模板注入）判断规则
+| Condition | Verdict | Severity |
+|---|---|---|
+| User or stored value reaches SpEL `parseExpression(...).getValue()` | Confirm | CRITICAL |
+| User or stored value reaches MVEL/Groovy/OGNL expression execution | Confirm | CRITICAL |
+| User value is treated as FreeMarker/Velocity template source | Confirm | HIGH/CRITICAL |
+| User value is only a data variable rendered by a fixed template | Suppress | — |
+| Template name is fixed and model data is escaped/non-executable | Suppress | — |
 
-Java 中高危场景：
-- **MVEL 注入**：`MVEL.eval()`、`MVEL.executeExpression()` 或攻击者可控的编译表达式执行
-- **SpEL 注入**：`parser.parseExpression(userInput).getValue()` — 可 RCE
-- **FreeMarker 注入**：`Template.process(userInput, ...)` — 可调用反射
-- **Velocity 注入**：`Velocity.evaluate(ctx, writer, tag, userInput)` — 可 RCE
-- **Thymeleaf 片段注入**：`~{userInput}`（CVE-2021-43466）
-- **OGNL 注入**：`Ognl.getValue(userInput, ctx)` — Struts2 RCE 根源
+For stored expression candidates, repository identity alone is supporting
+evidence. Confirm the same entity field, mapper property, DB column, cache key,
+or serialized property is written and later executed.
 
-### SSTI 判断规则
+## False Positive Suppressors
 
-| 场景 | 判定 | 严重度 |
-|------|------|--------|
-| 用户输入 → SpEL `parseExpression()` | **漏洞** | CRITICAL |
-| HTTP 写入表达式字段 → 数据库存储 → 定时任务/消息消费读取并执行 MVEL/SpEL/Groovy | **漏洞** | CRITICAL |
-| 用户输入作为 FreeMarker/Velocity 模板内容 | **漏洞** | CRITICAL |
-| 用户输入仅作为模板变量（数据） | 安全 | — |
-| 使用固定模板名称加载 | 安全 | — |
+Do not report when:
 
-### SSTI 存储型候选验证要点
+- The command executable and every security-sensitive argument are selected from
+  a closed server-side allowlist.
+- User input is passed as a literal data argument to an executable that does not
+  interpret it as command syntax, path traversal, option injection, or script.
+- Shell mode is not used and attacker input cannot become executable path,
+  option, script, or command delimiter.
+- Expression/template APIs receive only fixed server-side expressions/templates
+  and attacker input is bound as data.
 
-存储型候选（stored candidate）是本类别的核心场景：
-- 确认 HTTP 写入路径中的字段与执行路径中读取的字段是同一个实体属性
-- 仅 Repository 名称相同不够——必须确认字段/列对应关系
-- 确认执行路径是自动触发的（`@Scheduled`、消息监听、事件处理）还是需要另一个 HTTP 请求触发
-- 检查表达式引擎的 compile/bind/concatenation 步骤：值是否控制可执行语法而非仅数据变量
+Blacklist character filters, quote escaping, or partial regex checks usually
+reduce confidence; they do not suppress unless they form a strict allowlist with
+canonicalization.
 
-`rule_id` 命名：`ssti-spel`、`ssti-mvel`、`ssti-freemarker`、`ssti-velocity`、`ssti-ognl`。
+## Severity And Confidence
+
+- CRITICAL/HIGH: confirmed external or stored taint reaches shell command text
+  or expression code.
+- HIGH/HIGH: executable path/first argument is controlled without shell mode.
+- MEDIUM/MEDIUM: later argument injection or opaque wrapper where exploitability
+  depends on command semantics.
+- Suppress: strict allowlist or data-only binding is proven.
+
+## Evidence Requirements
+
+A valid finding should cite:
+
+- Entry parameter or stored field.
+- The propagation step into command/expression/template text.
+- The sink API and line.
+- Why sanitization/allowlisting does not prevent executable syntax control.
+- For stored flows, the write field and read/execute field correspondence.
+- Suppressors considered and why they do not apply.
+
+`rule_id` values: `cmdinj-exec-string`, `cmdinj-exec-args`,
+`cmdinj-procbuilder`, `cmdinj-bash-concat`, `cmdinj-template-replace`,
+`cmdinj-config-template`, `ssti-spel`, `ssti-mvel`, `ssti-freemarker`,
+`ssti-velocity`, `ssti-ognl`, `cmdinj-option-injection`.

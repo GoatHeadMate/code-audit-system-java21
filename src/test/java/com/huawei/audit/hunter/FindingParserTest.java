@@ -32,6 +32,30 @@ class FindingParserTest {
                 .containsEntry("start_line", 42)
                 .containsEntry("message", "SQL is concatenated")
                 .containsEntry("vuln_type", "SQL_INJECTION")
-                .containsEntry("discovered_by", "sql_injection");
+                .containsEntry("discovered_by", "sql_injection")
+                .containsEntry("verdict", "CONFIRM")
+                .containsEntry("status", "CONFIRM");
+    }
+
+    @Test
+    void normalizesNeedsReviewStatusAsVerdict() {
+        String response = """
+                [{
+                  "rule_id": "authz-tenant-bypass",
+                  "status": "needs_review",
+                  "severity": "medium",
+                  "confidence": "medium",
+                  "file_path": "src/Admin.java",
+                  "start_line": 7,
+                  "message": "Tenant check is incomplete"
+                }]
+                """;
+
+        var findings = parser.parse(response, "authorization");
+
+        assertThat(findings).hasSize(1);
+        assertThat(findings.getFirst())
+                .containsEntry("verdict", "NEEDS_REVIEW")
+                .containsEntry("status", "NEEDS_REVIEW");
     }
 }

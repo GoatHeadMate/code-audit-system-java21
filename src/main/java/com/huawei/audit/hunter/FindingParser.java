@@ -48,6 +48,11 @@ public class FindingParser {
             if (vulnType.isBlank()) {
                 vulnType = hunter;
             }
+            String verdict = normalizeVerdict(stringValue(
+                    finding,
+                    "verdict",
+                    "status"
+            ));
 
             finding.put("file_path", filePath);
             finding.put("start_line", startLine);
@@ -59,6 +64,8 @@ public class FindingParser {
             ));
             finding.put("vuln_type", vulnType.toUpperCase(Locale.ROOT));
             finding.put("vulnerability_type", vulnType.toUpperCase(Locale.ROOT));
+            finding.put("verdict", verdict);
+            finding.put("status", verdict);
             finding.putIfAbsent("discovered_by", hunter);
             finding.putIfAbsent("data_flow_path", List.of());
             normalized.add(finding);
@@ -114,6 +121,20 @@ public class FindingParser {
             }
         }
         return "";
+    }
+
+    private String normalizeVerdict(String value) {
+        if (value.isBlank()) {
+            return "CONFIRM";
+        }
+        return switch (value.strip().toUpperCase(Locale.ROOT).replace('-', '_')) {
+            case "CONFIRM", "CONFIRMED", "TRUE_POSITIVE" -> "CONFIRM";
+            case "DOWNGRADE", "DOWNGRADED" -> "DOWNGRADE";
+            case "NEEDS_REVIEW", "NEED_REVIEW", "REVIEW", "REQUIRES_REVIEW" ->
+                    "NEEDS_REVIEW";
+            case "SUPPRESS", "SUPPRESSED", "FALSE_POSITIVE" -> "SUPPRESS";
+            default -> value.strip().toUpperCase(Locale.ROOT).replace('-', '_');
+        };
     }
 
     private int intValue(Map<String, Object> finding, String... keys) {

@@ -210,11 +210,14 @@ public class SupervisorAgent {
                    Reject findings that name a sink but do not validate the candidate
                    entrypoint, dispatch path and attacker-controlled value flow.
                 7. Each finding MUST include these fields:
-                   rule_id, title, severity (CRITICAL/HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
+                   rule_id, verdict (CONFIRM/DOWNGRADE/NEEDS_REVIEW), title,
+                   severity (CRITICAL/HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
                    vuln_type (e.g. SQL_INJECTION, SSRF, XSS), file_path, start_line,
                    message, evidence, data_flow_path (array of strings), http_method,
                    http_path, entrypoint, reachability and discovery_source.
                    Omitting any of these fields makes the finding unparseable.
+                   Do not return SUPPRESS items as findings; use them only to explain
+                   why a candidate is not reported.
                 8. Before finalizing, verify each subagent confirmed it reviewed all
                    candidate chunks. If a subagent skipped chunks, resume it.
                 9. Return format:
@@ -320,9 +323,11 @@ public class SupervisorAgent {
             5. Use Read/Glob/Grep to resolve ambiguous dispatch and missing source slices.
             6. Never execute shell commands, create files, or delegate to another agent.
             7. Return a single JSON object: {"chunks_reviewed": N, "findings": [...]}.
-               Each finding must contain: rule_id, title, severity, confidence,
+               Each finding must contain: rule_id, verdict, title, severity, confidence,
                file_path, start_line, message, evidence, vuln_type, http_method,
                http_path, entrypoint, reachability, discovery_source, data_flow_path.
+               Use verdict values CONFIRM, DOWNGRADE, or NEEDS_REVIEW. Do not
+               include SUPPRESS candidates in findings.
             8. No markdown fences, no explanatory text around the JSON.
             """;
 

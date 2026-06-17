@@ -1,30 +1,102 @@
 # SSRF 判断知识
 
-## 判断规则
+## Use When
 
-| 场景 | 判定 | 严重度 |
-|------|------|--------|
-| 用户可控完整 URL + 无任何过滤 | **漏洞** | CRITICAL |
-| 用户可控 URL + 仅 `contains()` 子串白名单 | **漏洞** | HIGH（可绕过） |
-| 有白名单但开启重定向跟随 | **漏洞** | MEDIUM（重定向可绕过白名单） |
-| URL 部分可控（路径/参数片段） | **漏洞** | MEDIUM |
-| 有严格白名单且无重定向跟随 | 安全 | 不上报 |
-| URL 硬编码 | 安全 | 不上报 |
+Use this skill to validate candidate paths ending in outbound HTTP or URL-fetch
+sinks, including `RestTemplate`, Java `HttpClient`, Apache HTTP clients, URL
+stream APIs, webhook callbacks, import-by-URL flows, image/PDF fetchers, and
+HTTP proxy/forwarder utilities.
 
-**重点场景**：文件导入（URL 导入）、Webhook 回调、图片代理、PDF 生成。
+## Candidate Fields That Matter
 
-**综合判断**：
-- 候选路径显示 HTTP 参数直接流入 URL 构造 + 无过滤 → **CRITICAL**（confidence ≥ 0.90）
-- 候选路径显示 HTTP 参数流入 URL + 仅 `contains()` 弱过滤 → **HIGH**（confidence ≈ 0.80）
-- 候选路径到 OUTBOUND_HTTP sink 但中间经过不透明方法 → **MEDIUM**（confidence ≈ 0.65）
+- `entryPoint`: the external route and controllable parameter.
+- `sink`: outbound request API and line.
+- `methodPath` / `callEdges`: wrapper/proxy utilities between entry and sink.
+- `taintConfidence` and `sourceClassification`: full URL control vs partial
+  path/query control.
+- Nearby validation logic: allowlists, scheme checks, IP/private-range checks,
+  DNS resolution, redirect handling, and credential/header injection.
 
-## 验证要点
+## Common Verdict Rules
 
-- 检查是否支持 `file://` / `gopher://` / `dict://` 等非 HTTP 协议
-- 检查 HttpClient/RestTemplate 是否配置了自动跟随重定向
-- 用 Grep 搜索目标 URL 的验证逻辑（白名单、域名校验、IP 黑名单）
-- `String.contains()` 白名单可被 `http://evil.com#whitelisted.com` 绕过
-- **代理凭据注入**：检查 HTTP 转发/代理工具类（BackendRestClient、RestTemplate wrapper）是否在转发请求时自动添加认证头（x-user-name、Authorization、Cookie 等）。如果是，SSRF 的影响从"可发送请求"升级为"可以管理员身份发送请求"，在 finding 的 message 中标注。
-- **具体绕过手法**：对 contains()/startsWith() 白名单，需给出至少一种具体绕过 payload，如 `http://internal:8080/malicious?x=/whitelisted/path` 或 `http://whitelisted.com@evil.com`
+- Confirm only when source/reachability, propagation, outbound sink/target class,
+  and missing or bypassed protection are visible.
+- Downgrade when production profile, route reachability, trust boundary, DNS
+  behavior, redirect behavior, or runtime configuration is ambiguous.
+- Mark NEEDS_REVIEW when the outbound sink is sensitive but URL parsing, DNS/IP
+  validation, redirect, or credential-forwarding evidence is incomplete.
+- Suppress only when effective protection is visible and applies before every
+  outbound request.
 
-`rule_id` 命名：`ssrf-taint`、`ssrf-no-filter`、`ssrf-weak-contains`、`ssrf-redirect`、`ssrf-proxy`。
+Effective protection must cover the actual scheme, authority, host, port,
+resolved IP, redirect target, and credential/header forwarding behavior. It must
+run before the request and remain effective after URL parsing differences, DNS
+resolution, redirects, proxy routing, later decoding, or dispatch indirection.
+
+For stored or second-order candidates, confirm field correspondence: the
+externally written field, DB column, mapper property, cache key, serialized
+property, or config key must be the same value later read and used by the
+outbound sink. Repository/entity identity alone is supporting evidence.
+
+## Confirmed Vulnerability Conditions
+
+| Condition | Verdict | Severity |
+|---|---|---|
+| Attacker controls full URL and no effective validation exists | Confirm | CRITICAL |
+| URL validation uses `contains()` or weak substring matching | Confirm | HIGH |
+| URL validation uses `startsWith()` without URI parsing and canonical host checks | Confirm | HIGH |
+| Validation happens before a client follows redirects | Confirm | MEDIUM |
+| Attacker controls only path/query on a fixed trusted host | Usually confirm only when it reaches sensitive internal behavior | MEDIUM |
+| Proxy/forwarder adds internal credentials or cookies to attacker-chosen target | Confirm and upgrade impact | HIGH/CRITICAL |
+
+Weak allowlist bypass examples include:
+
+- `http://whitelisted.com@evil.com`
+- `http://evil.com#whitelisted.com`
+- `http://internal:8080/path?next=/whitelisted/path`
+- Open redirect from an allowed host to an internal host.
+
+Host validation must handle IPv4 decimal/octal/hex/dword forms, IPv6 literals,
+IPv4-mapped IPv6, localhost aliases, trailing dots, mixed case, punycode/IDN,
+DNS rebinding, and parser differences between validation and request clients.
+
+Private range checks should include localhost, RFC1918, link-local, loopback,
+unique-local IPv6, multicast/reserved ranges, and cloud metadata endpoints such
+as `169.254.169.254` or provider-specific metadata hostnames.
+
+If redirects are enabled, every redirect target must be revalidated after DNS
+resolution. Validating only the first URL is insufficient.
+
+## False Positive Suppressors
+
+Do not report when all relevant checks are present:
+
+- Scheme is restricted to `http`/`https` as intended.
+- Host is parsed with URI/URL APIs and compared against a strict allowlist.
+- DNS resolution and final IP are checked against private/link-local/metadata
+  ranges when internal access is dangerous.
+- Redirects are disabled or every redirect target is revalidated.
+- User input only controls a path segment on a fixed safe origin and cannot
+  influence scheme, authority, host, port, or redirect destination.
+
+## Severity And Confidence
+
+- CRITICAL/HIGH: full URL control can reach internal services or cloud metadata.
+- HIGH/HIGH: weak allowlist bypass is concrete and sink is reachable.
+- HIGH/MEDIUM: proxy credentials are injected but exact privileged target is not
+  fully proven.
+- MEDIUM/MEDIUM: only partial URL control or redirect-dependent exploitation.
+
+## Evidence Requirements
+
+A valid SSRF finding should cite:
+
+- The request parameter or stored field controlling the URL.
+- The URL construction and outbound request line.
+- The validation logic, or the absence of validation.
+- A concrete bypass or reachable internal target class when claiming HIGH+.
+- Whether internal credentials, cookies, or headers are automatically attached.
+- Suppressors considered and why they do not apply.
+
+`rule_id` values: `ssrf-taint`, `ssrf-no-filter`, `ssrf-weak-contains`,
+`ssrf-redirect`, `ssrf-proxy`, `ssrf-metadata`.
