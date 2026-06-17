@@ -6,3 +6,4 @@ workspace/
 .claude/
 .tmp-tests/
 *.lnk
+temp_findings.json
