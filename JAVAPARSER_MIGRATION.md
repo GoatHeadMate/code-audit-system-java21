@@ -134,7 +134,9 @@
 - [x] 阶段 3 接入 SymbolSolver（开关默认关闭，容错回退，实测见上）
 - [~] 阶段 4 （可选）精确连边 —— 跳过：实测显示无 classpath 下增量收益有限
 - [x] 阶段 5 HttpEndpointScanner 迁 JavaParser + 修 3 类 bug（相对路径 / 注释污染 / 内部类，83 测试全过）
+- [x] 阶段 6 Servlet/Async discoverer 迁 JavaParser + 删除 HttpAnnotationParser（入口层正则彻底消除，91 测试全过）
 
-> 备注：`ServletEntryPointDiscoverer` 与 `AsyncEntryPointDiscoverer` 仍为正则 + 共享
-> `HttpAnnotationParser`，存在同类潜在缺陷（注释污染 className 等），但不在本次 bug
-> 范围内，未改动；如需可作后续项。
+> 入口层现已全部基于 JavaParser AST，共享正则 parser `HttpAnnotationParser` 已删除。
+> `ServletEntryPointDiscoverer` 新增 8 个特征测试，覆盖 servlet / filter / interceptor /
+> websocket / grpc / dubbo / lifecycle。JavaParser 版不再依赖"方法必须带注解才处理"，
+> 因此能发现无 @Override 的 servlet 方法等正则版会漏的入口。

@@ -1,5 +1,13 @@
 package com.huawei.audit.source;
 
+import com.github.javaparser.JavaParser;
+import com.github.javaparser.ParseResult;
+import com.github.javaparser.ParserConfiguration;
+import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.expr.AnnotationExpr;
+import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.huawei.audit.analysis.EntryPointDiscoverer;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -8,27 +16,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
 @Component
 public class ServletEntryPointDiscoverer implements EntryPointDiscoverer {
-    private static final Pattern CLASS_DECL = Pattern.compile(
-            "\\b(?:class|interface)\\s+(\\w+)"
-                    + "(?:\\s+extends\\s+([\\w.]+))?"
-                    + "(?:\\s+implements\\s+([\\w.,\\s]+))?"
-    );
-    private static final Pattern METHOD_NAME = Pattern.compile(
-            "([A-Za-z_$][\\w$]*)\\s*\\("
-    );
-    private static final Pattern IMPLBASE_SUFFIX = Pattern.compile("\\w+ImplBase$");
+    private static final Pattern IMPLBASE_SUFFIX = Pattern.compile("\\w+ImplBase");
     private static final Set<String> SERVLET_METHODS = Set.of(
             "doGet", "doPost", "doPut", "doDelete", "doPatch", "service"
-    );
-    private static final Set<String> DUBBO_ANNOTATIONS = Set.of("DubboService");
-    private static final Pattern DUBBO_IMPORT = Pattern.compile(
-            "org\\.apache\\.dubbo|com\\.alibaba\\.dubbo"
     );
     private static final Map<String, List<String>> SERVLET_OPS = Map.of(
             "doGet", List.of("GET"),
@@ -38,8 +33,22 @@ public class ServletEntryPointDiscoverer implements EntryPointDiscoverer {
             "doPatch", List.of("PATCH"),
             "service", List.of("ANY")
     );
+    private static final Set<String> WEBSOCKET_METHODS = Set.of(
+            "handleMessage", "handleTextMessage",
+            "handleBinaryMessage", "afterConnectionEstablished"
+    );
+    private static final Set<String> WEBSOCKET_LIFECYCLE = Set.of(
+            "OnMessage", "OnOpen", "OnClose", "OnError"
+    );
+    private static final Set<String> SECURITY_ANNOTATIONS = Set.of(
+            "PreAuthorize", "Secured", "RolesAllowed", "PermitAll", "DenyAll"
+    );
+    private static final Pattern DUBBO_IMPORT = Pattern.compile(
+            "org\\.apache\\.dubbo|com\\.alibaba\\.dubbo"
+    );
 
-    private final HttpAnnotationParser annotations = new HttpAnnotationParser();
+    private final JavaParser parser = new JavaParser(new ParserConfiguration()
+            .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21));
 
     @Override
     public String id() {
@@ -67,315 +76,175 @@ public class ServletEntryPointDiscoverer implements EntryPointDiscoverer {
             Path sourceRoot,
             Path file,
             List<DiscoveredEntryPoint> result
-    ) throws IOException {
-        List<String> lines = Files.readAllLines(file);
+    ) {
         String relativePath = sourceRoot.relativize(file)
                 .toString()
                 .replace('\\', '/');
-        boolean hasDubboImport = hasDubboImport(lines);
-        String currentClassName = "";
-        String currentExtends = "";
-        List<String> currentImplements = List.of();
-        boolean classHasWebServlet = false;
-        boolean classHasDubboService = false;
-        List<HttpAnnotationParser.AnnotationRef> pending = new ArrayList<>();
-
-        for (int index = 0; index < lines.size(); index++) {
-            String trimmed = lines.get(index).strip();
-            if (trimmed.startsWith("@")) {
-                HttpAnnotationParser.AnnotationBlock block =
-                        annotations.annotationBlock(lines, index);
-                pending.addAll(annotations.parse(block.text()));
-                index = block.endLine();
-                continue;
-            }
-
-            Matcher classMatcher = CLASS_DECL.matcher(trimmed);
-            if (classMatcher.find()) {
-                currentClassName = classMatcher.group(1);
-                currentExtends = classMatcher.group(2) == null
-                        ? "" : simpleName(classMatcher.group(2));
-                String implementsClause = classMatcher.group(3);
-                currentImplements = implementsClause == null
-                        ? List.of()
-                        : parseImplements(implementsClause);
-                classHasWebServlet = annotations.hasAny(
-                        pending, "WebServlet");
-                classHasDubboService = hasDubboAnnotation(pending, hasDubboImport);
-                pending.clear();
-                continue;
-            }
-
-            if (!pending.isEmpty() && looksLikeMethod(trimmed)) {
-                String mName = methodName(trimmed);
-                int lineNum = index + 1;
-
-                if (SERVLET_METHODS.contains(mName)
-                        && extendsOrImplements(
-                                currentExtends, currentImplements,
-                                "HttpServlet")) {
-                    result.add(new DiscoveredEntryPoint(
-                            "HTTP",
-                            SERVLET_OPS.get(mName),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "servlet",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "HIGH"
-                    ));
-                } else if (classHasWebServlet) {
-                    result.add(new DiscoveredEntryPoint(
-                            "HTTP",
-                            List.of("ANY"),
-                            servletRoute(pending),
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "servlet",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "HIGH"
-                    ));
-                }
-
-                if ("doFilter".equals(mName)
-                        && implementsAnyOf(currentImplements, "Filter")) {
-                    result.add(new DiscoveredEntryPoint(
-                            "HTTP_FILTER",
-                            List.of("FILTER"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "servlet",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "HIGH"
-                    ));
-                }
-
-                if ("preHandle".equals(mName)
-                        && implementsAnyOf(
-                                currentImplements, "HandlerInterceptor")) {
-                    result.add(new DiscoveredEntryPoint(
-                            "HTTP_FILTER",
-                            List.of("INTERCEPTOR"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "spring-mvc",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "MEDIUM"
-                    ));
-                }
-
-                if (isWebSocketEntry(currentExtends, currentImplements,
-                        pending, mName)) {
-                    result.add(new DiscoveredEntryPoint(
-                            "WEBSOCKET",
-                            List.of("MESSAGE"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "websocket",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "HIGH"
-                    ));
-                }
-
-                if (IMPLBASE_SUFFIX.matcher(currentExtends).matches()
-                        && !mName.equals(currentClassName)
-                        && !isStaticOrAbstract(trimmed)) {
-                    result.add(new DiscoveredEntryPoint(
-                            "GRPC",
-                            List.of("UNARY"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "grpc",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "MEDIUM"
-                    ));
-                }
-
-                if (classHasDubboService
-                        || hasDubboAnnotation(pending, hasDubboImport)) {
-                    result.add(new DiscoveredEntryPoint(
-                            "RPC",
-                            List.of("DUBBO"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "dubbo",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "MEDIUM"
-                    ));
-                }
-
-                if ("run".equals(mName)
-                        && implementsAnyOf(currentImplements,
-                                "CommandLineRunner",
-                                "ApplicationRunner")) {
-                    result.add(new DiscoveredEntryPoint(
-                            "LIFECYCLE",
-                            List.of("STARTUP"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "spring-lifecycle",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "LOW"
-                    ));
-                }
-
-                if (annotations.hasAny(pending, "PostConstruct")) {
-                    result.add(new DiscoveredEntryPoint(
-                            "LIFECYCLE",
-                            List.of("INIT"),
-                            "",
-                            currentClassName,
-                            mName,
-                            relativePath,
-                            lineNum,
-                            "spring-lifecycle",
-                            annotations.securityAnnotations(pending),
-                            id(),
-                            "LOW"
-                    ));
-                }
-
-                pending.clear();
-            } else if (!trimmed.isBlank()
-                    && !trimmed.startsWith("//")
-                    && !trimmed.startsWith("*")
-                    && !trimmed.startsWith("/*")) {
-                pending.clear();
-            }
+        ParseResult<CompilationUnit> parsed;
+        try {
+            parsed = parser.parse(file);
+        } catch (Exception ignored) {
+            return;
         }
+        parsed.getResult().ifPresent(unit -> {
+            boolean dubboImport = hasDubboImport(unit);
+            for (ClassOrInterfaceDeclaration type
+                    : unit.findAll(ClassOrInterfaceDeclaration.class)) {
+                scanType(type, relativePath, dubboImport, result);
+            }
+        });
     }
 
-    private boolean extendsOrImplements(
-            String extendsName,
-            List<String> implementsList,
-            String target
+    private void scanType(
+            ClassOrInterfaceDeclaration type,
+            String relativePath,
+            boolean dubboImport,
+            List<DiscoveredEntryPoint> result
     ) {
-        return target.equals(extendsName)
-                || implementsList.contains(target);
-    }
+        String className = type.getNameAsString();
+        String extendsName = type.getExtendedTypes().isEmpty()
+                ? ""
+                : type.getExtendedTypes().get(0).getNameAsString();
+        List<String> implementsNames = type.getImplementedTypes().stream()
+                .map(implemented -> implemented.getNameAsString())
+                .toList();
+        boolean classWebServlet = hasAnnotation(type.getAnnotations(), "WebServlet");
+        boolean classServerEndpoint =
+                hasAnnotation(type.getAnnotations(), "ServerEndpoint");
+        boolean classDubbo = hasAnnotation(type.getAnnotations(), "DubboService")
+                || (hasAnnotation(type.getAnnotations(), "Service") && dubboImport);
+        String webServletRoute = classWebServlet
+                ? routeOf(type.getAnnotations(), "WebServlet")
+                : "";
 
-    private boolean implementsAnyOf(
-            List<String> implementsList,
-            String... targets
-    ) {
-        for (String target : targets) {
-            if (implementsList.contains(target)) {
-                return true;
+        for (MethodDeclaration method : type.getMethods()) {
+            String name = method.getNameAsString();
+            int line = method.getBegin().map(position -> position.line).orElse(0);
+            List<String> security = securityAnnotations(method.getAnnotations());
+
+            if (SERVLET_METHODS.contains(name)
+                    && (extendsName.equals("HttpServlet")
+                            || implementsNames.contains("HttpServlet"))) {
+                result.add(entry("HTTP", SERVLET_OPS.get(name), "", className,
+                        name, relativePath, line, "servlet", security, "HIGH"));
+            } else if (classWebServlet) {
+                result.add(entry("HTTP", List.of("ANY"), webServletRoute, className,
+                        name, relativePath, line, "servlet", security, "HIGH"));
+            }
+
+            if ("doFilter".equals(name) && implementsNames.contains("Filter")) {
+                result.add(entry("HTTP_FILTER", List.of("FILTER"), "", className,
+                        name, relativePath, line, "servlet", security, "HIGH"));
+            }
+            if ("preHandle".equals(name)
+                    && implementsNames.contains("HandlerInterceptor")) {
+                result.add(entry("HTTP_FILTER", List.of("INTERCEPTOR"), "", className,
+                        name, relativePath, line, "spring-mvc", security, "MEDIUM"));
+            }
+            if (isWebSocketEntry(classServerEndpoint, implementsNames, method, name)) {
+                result.add(entry("WEBSOCKET", List.of("MESSAGE"), "", className,
+                        name, relativePath, line, "websocket", security, "HIGH"));
+            }
+            if (IMPLBASE_SUFFIX.matcher(extendsName).matches()
+                    && !name.equals(className)
+                    && !method.isStatic()
+                    && !method.isAbstract()) {
+                result.add(entry("GRPC", List.of("UNARY"), "", className,
+                        name, relativePath, line, "grpc", security, "MEDIUM"));
+            }
+            if (classDubbo
+                    || hasAnnotation(method.getAnnotations(), "DubboService")
+                    || (hasAnnotation(method.getAnnotations(), "Service") && dubboImport)) {
+                result.add(entry("RPC", List.of("DUBBO"), "", className,
+                        name, relativePath, line, "dubbo", security, "MEDIUM"));
+            }
+            if ("run".equals(name)
+                    && (implementsNames.contains("CommandLineRunner")
+                            || implementsNames.contains("ApplicationRunner"))) {
+                result.add(entry("LIFECYCLE", List.of("STARTUP"), "", className,
+                        name, relativePath, line, "spring-lifecycle", security, "LOW"));
+            }
+            if (hasAnnotation(method.getAnnotations(), "PostConstruct")) {
+                result.add(entry("LIFECYCLE", List.of("INIT"), "", className,
+                        name, relativePath, line, "spring-lifecycle", security, "LOW"));
             }
         }
-        return false;
     }
 
     private boolean isWebSocketEntry(
-            String extendsName,
-            List<String> implementsList,
-            List<HttpAnnotationParser.AnnotationRef> pending,
-            String methodName
+            boolean classServerEndpoint,
+            List<String> implementsNames,
+            MethodDeclaration method,
+            String name
     ) {
-        if (annotations.hasAny(pending, "ServerEndpoint")) {
+        if (classServerEndpoint
+                && hasAnyAnnotation(method.getAnnotations(), WEBSOCKET_LIFECYCLE)) {
             return true;
         }
-        Set<String> wsMethods = Set.of(
-                "handleMessage", "handleTextMessage",
-                "handleBinaryMessage", "afterConnectionEstablished"
+        return implementsNames.contains("WebSocketHandler")
+                && WEBSOCKET_METHODS.contains(name);
+    }
+
+    private DiscoveredEntryPoint entry(
+            String protocol,
+            List<String> operations,
+            String route,
+            String className,
+            String methodName,
+            String filePath,
+            int line,
+            String framework,
+            List<String> security,
+            String confidence
+    ) {
+        return new DiscoveredEntryPoint(
+                protocol, operations, route, className, methodName,
+                filePath, line, framework, security, id(), confidence
         );
-        return implementsAnyOf(implementsList, "WebSocketHandler")
-                && wsMethods.contains(methodName);
     }
 
-    private boolean hasDubboAnnotation(
-            List<HttpAnnotationParser.AnnotationRef> pending,
-            boolean hasDubboImport
-    ) {
-        return pending.stream()
-                .map(HttpAnnotationParser.AnnotationRef::name)
-                .anyMatch(name -> DUBBO_ANNOTATIONS.contains(name)
-                        || ("Service".equals(name) && hasDubboImport));
-    }
-
-    private boolean hasDubboImport(List<String> lines) {
-        int limit = Math.min(lines.size(), 60);
-        for (int i = 0; i < limit; i++) {
-            if (DUBBO_IMPORT.matcher(lines.get(i)).find()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String servletRoute(
-            List<HttpAnnotationParser.AnnotationRef> pending
-    ) {
-        List<String> values = annotations.quotedValues(
-                pending, "WebServlet");
+    private String routeOf(List<AnnotationExpr> annotations, String name) {
+        List<String> values = annotations.stream()
+                .filter(annotation ->
+                        simpleName(annotation.getNameAsString()).equals(name))
+                .flatMap(annotation ->
+                        annotation.findAll(StringLiteralExpr.class).stream())
+                .map(StringLiteralExpr::getValue)
+                .toList();
         return values.isEmpty() ? "" : String.join(",", values);
     }
 
-    private List<String> parseImplements(String clause) {
-        List<String> result = new ArrayList<>();
-        for (String part : clause.split(",")) {
-            String name = part.strip();
-            if (!name.isEmpty()) {
-                result.add(simpleName(name));
-            }
-        }
-        return List.copyOf(result);
+    private List<String> securityAnnotations(List<AnnotationExpr> annotations) {
+        return annotations.stream()
+                .map(annotation -> simpleName(annotation.getNameAsString()))
+                .filter(SECURITY_ANNOTATIONS::contains)
+                .toList();
     }
 
-    private String simpleName(String qualified) {
-        int dot = qualified.lastIndexOf('.');
-        return dot < 0 ? qualified : qualified.substring(dot + 1);
+    private boolean hasAnnotation(List<AnnotationExpr> annotations, String name) {
+        return annotations.stream()
+                .anyMatch(annotation ->
+                        simpleName(annotation.getNameAsString()).equals(name));
     }
 
-    private boolean looksLikeMethod(String line) {
-        return line.contains("(")
-                && !line.startsWith("if")
-                && !line.startsWith("for")
-                && !line.startsWith("while")
-                && !line.startsWith("switch");
+    private boolean hasAnyAnnotation(
+            List<AnnotationExpr> annotations,
+            Set<String> names
+    ) {
+        return annotations.stream()
+                .map(annotation -> simpleName(annotation.getNameAsString()))
+                .anyMatch(names::contains);
     }
 
-    private String methodName(String declaration) {
-        Matcher matcher = METHOD_NAME.matcher(declaration);
-        String result = "";
-        while (matcher.find()) {
-            result = matcher.group(1);
-        }
-        return result;
+    private boolean hasDubboImport(CompilationUnit unit) {
+        return unit.getImports().stream()
+                .anyMatch(importDeclaration ->
+                        DUBBO_IMPORT.matcher(
+                                importDeclaration.getNameAsString()).find());
     }
 
-    private boolean isStaticOrAbstract(String line) {
-        return line.contains(" static ")
-                || line.contains(" abstract ");
+    private String simpleName(String name) {
+        int separator = name.lastIndexOf('.');
+        return separator >= 0 ? name.substring(separator + 1) : name;
     }
 }
