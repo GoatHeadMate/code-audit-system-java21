@@ -43,6 +43,22 @@ _SUPERVISOR_SYSTEM_PROMPT = (
 )
 _READ_ONLY_TOOLS = ["Agent", "SendMessage", "Read", "Glob", "Grep"]
 
+# The native /goal slash command (Claude Code >= 2.1.139; the bundled CLI here is
+# 2.1.179) turns this one-shot query() into a goal-driven run that continues until
+# the stated completion condition is met (session goal + Stop-hook evaluator) —
+# the real mechanism behind the prose "goal mode" hint above. It is delivered as
+# the FIRST characters of the query prompt, not via a ClaudeAgentOptions field.
+# Requires a trusted workspace with hooks enabled; if `goal` is absent from the
+# init message's slash_commands the line degrades to a plain (still valid)
+# instruction. /loop is deliberately NOT used: it is a scheduled, repeating
+# bundled skill that needs a long-lived ClaudeSDKClient, not a one-shot query().
+_GOAL_DIRECTIVE = (
+    "/goal 完成本次白盒安全审计, 在满足以下全部完成条件前不要结束: "
+    "(1) 已为每个候选 Hunter 委派其对应子代理; "
+    "(2) 已复核所有子代理返回的发现并剔除重复与明显误报; "
+    "(3) 已产出唯一的最终 JSON 对象(字段: selected_hunters, rationale, findings)."
+)
+
 
 class ClaudeSdkRunner:
     def __init__(self, settings: Settings) -> None:
@@ -123,10 +139,11 @@ class ClaudeSdkRunner:
             setting_sources=["user", "project"],
             env=self._env,
         )
+        goal_prompt = f"{_GOAL_DIRECTIVE}\n\n{request.prompt}"
         active: dict[str, str] = {}
         completed = 0
         try:
-            async for message in query(prompt=request.prompt, options=options):
+            async for message in query(prompt=goal_prompt, options=options):
                 match message:
                     case TaskStartedMessage(
                         task_id=task_id,
@@ -185,9 +202,16 @@ class ClaudeSdkRunner:
                         yield ErrorEvent(
                             message="; ".join(errors or ["Claude supervisor failed"])
                         )
+                    case SystemMessage() as system_message:
+                        if getattr(system_message, "subtype", None) == "init":
+                            yield AssistantTextEvent(
+                                text=_goal_mode_status(
+                                    getattr(system_message, "data", None)
+                                )
+                            )
+                        continue
                     case (
                         UserMessage()
-                        | SystemMessage()
                         | StreamEvent()
                         | RateLimitEvent()
                     ):
@@ -214,6 +238,19 @@ def _build_agents(
             kwargs["skills"] = defn.skills
         result[name] = AgentDefinition(**kwargs)
     return result
+
+
+def _goal_mode_status(data: object) -> str:
+    commands = data.get("slash_commands", []) if isinstance(data, dict) else []
+    if "goal" in commands:
+        return (
+            "[goal-mode] /goal active; running until the completion condition "
+            f"is met (loop available={'loop' in commands})"
+        )
+    return (
+        "[goal-mode] /goal not exposed; falling back to a plain goal instruction "
+        "-- verify the workspace is trusted and hooks are enabled"
+    )
 
 
 def _completion_status(
