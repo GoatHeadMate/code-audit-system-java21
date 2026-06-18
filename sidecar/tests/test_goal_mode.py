@@ -50,6 +50,18 @@ def _result(text: str, session_id: str = "s1") -> ResultMessage:
     )
 
 
+def _error_result(errors: list[str], session_id: str = "s1") -> ResultMessage:
+    return ResultMessage(
+        subtype="error_max_turns",
+        duration_ms=0,
+        duration_api_ms=0,
+        is_error=True,
+        num_turns=1,
+        session_id=session_id,
+        errors=errors,
+    )
+
+
 def _fake_query(
     scripts: Sequence[Sequence[object]], calls: list[str]
 ) -> Callable[..., AsyncIterator[object]]:
@@ -164,6 +176,35 @@ def test_max_turns_is_converted_to_error_event(
 
         async def gen() -> AsyncIterator[object]:
             yield _init(["goal"])
+            raise Exception(_MAX_TURNS_MESSAGE)  # noqa: TRY002
+
+        return gen()
+
+    monkeypatch.setattr(sdk_runner, "query", raising_query)
+
+    events = _drain(ClaudeSdkRunner(_settings()), _request())
+
+    assert len(calls) == 1
+    errors = [e for e in events if isinstance(e, ErrorEvent)]
+    assert len(errors) == 1
+    assert "maximum number of turns" in errors[0].message
+
+
+def test_max_turns_result_then_raise_yields_single_error_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real protocol: the SDK first yields ResultMessage(is_error=True) and THEN
+    # the stream raises the wrapped Exception for the same failure. Exactly one
+    # ErrorEvent must result — the terminal ResultMessage stops the attempt so
+    # the trailing exception is not converted into a second event.
+    calls: list[str] = []
+
+    def raising_query(*, prompt: str, **_kwargs: object) -> AsyncIterator[object]:
+        calls.append(prompt)
+
+        async def gen() -> AsyncIterator[object]:
+            yield _init(["goal"])
+            yield _error_result(["Reached maximum number of turns (1)"])
             raise Exception(_MAX_TURNS_MESSAGE)  # noqa: TRY002
 
         return gen()

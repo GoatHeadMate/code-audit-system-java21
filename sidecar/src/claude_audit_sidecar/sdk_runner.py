@@ -241,12 +241,17 @@ class ClaudeSdkRunner:
                             session_id=session_id,
                             total_cost_usd=total_cost_usd,
                         )
+                        return
                     case ResultMessage(is_error=True, errors=errors):
                         yield ErrorEvent(
                             message="; ".join(
                                 errors or ["Claude supervisor failed"]
                             )
                         )
+                        # A ResultMessage is terminal. Stop here so the wrapped
+                        # exception the SDK then raises for the same failure
+                        # (e.g. max_turns) does not become a second ErrorEvent.
+                        return
                     case SystemMessage() as system_message:
                         if getattr(system_message, "subtype", None) == "init":
                             commands = _slash_commands(
