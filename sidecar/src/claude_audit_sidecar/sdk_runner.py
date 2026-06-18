@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import Literal, assert_never
+from typing import Literal, assert_never, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -42,6 +42,23 @@ _SUPERVISOR_SYSTEM_PROMPT = (
     "delegate to subagents, and synthesize results independently."
 )
 _READ_ONLY_TOOLS = ["Agent", "SendMessage", "Read", "Glob", "Grep"]
+
+# The native /goal slash command (Claude Code >= 2.1.139; the bundled CLI here is
+# 2.1.179) turns this one-shot query() into a goal-driven run that continues until
+# the stated completion condition is met (session goal + Stop-hook evaluator) —
+# the real mechanism behind the prose "goal mode" hint above. It is delivered as
+# the FIRST characters of the query prompt, not via a ClaudeAgentOptions field.
+# Requires a trusted workspace with hooks enabled; if `goal` is absent from the
+# init message's slash_commands the line degrades to a plain (still valid)
+# instruction. /loop is deliberately NOT used: it is a scheduled, repeating
+# bundled skill that needs a long-lived ClaudeSDKClient, not a one-shot query().
+_GOAL_DIRECTIVE = (
+    "/goal 完成本次白盒安全审计, 在满足以下全部完成条件前不要结束: "
+    "(1) 已按本会话的选择策略与上限为每个最终选中的 Hunter 委派其对应子代理 "
+    "(遵循智能选择, 不要求委派全部候选); "
+    "(2) 已复核所有子代理返回的发现并剔除重复与明显误报; "
+    "(3) 已产出唯一的最终 JSON 对象(字段: selected_hunters, rationale, findings)."
+)
 
 
 class ClaudeSdkRunner:
@@ -91,12 +108,12 @@ class ClaudeSdkRunner:
             raise ClaudeExecutionError(detail=str(error)) from error
         raise ClaudeExecutionError(detail="Claude query returned no result")
 
-    async def supervise(
+    def _supervise_options(
         self,
         request: SuperviseRequest,
-    ) -> AsyncIterator[SidecarEvent]:
-        agents = _build_agents(request.agents) if request.agents else {}
-        options = ClaudeAgentOptions(
+        agents: dict[str, AgentDefinition],
+    ) -> ClaudeAgentOptions:
+        return ClaudeAgentOptions(
             tools=_READ_ONLY_TOOLS,
             allowed_tools=_READ_ONLY_TOOLS,
             disallowed_tools=[
@@ -123,10 +140,45 @@ class ClaudeSdkRunner:
             setting_sources=["user", "project"],
             env=self._env,
         )
+
+    async def supervise(
+        self,
+        request: SuperviseRequest,
+    ) -> AsyncIterator[SidecarEvent]:
+        agents = _build_agents(request.agents) if request.agents else {}
+        options = self._supervise_options(request, agents)
+        plain_prompt = request.prompt
+        goal_prompt = f"{_GOAL_DIRECTIVE}\n\n{plain_prompt}"
+        # Drive the run with /goal first. If this session does not expose the
+        # `goal` slash command (seen in the init message) or the CLI returns the
+        # "/goal isn't available" sentinel, transparently RESTART with the plain
+        # prompt — so the supervisor result is always a real audit envelope, never
+        # the slash-command error string.
+        for is_goal, prompt in ((True, goal_prompt), (False, plain_prompt)):
+            restart_plain = [False]
+            async for event in self._stream_attempt(
+                prompt,
+                is_goal=is_goal,
+                options=options,
+                restart_plain=restart_plain,
+            ):
+                yield event
+            if not restart_plain[0]:
+                return
+
+    async def _stream_attempt(
+        self,
+        prompt: str,
+        *,
+        is_goal: bool,
+        options: ClaudeAgentOptions,
+        restart_plain: list[bool],
+    ) -> AsyncIterator[SidecarEvent]:
         active: dict[str, str] = {}
         completed = 0
+        stream = query(prompt=prompt, options=options)
         try:
-            async for message in query(prompt=request.prompt, options=options):
+            async for message in stream:
                 match message:
                     case TaskStartedMessage(
                         task_id=task_id,
@@ -158,7 +210,9 @@ class ClaudeSdkRunner:
                         for block in content:
                             match block:
                                 case TextBlock(text=text) if text.strip():
-                                    yield AssistantTextEvent(text=_preview(text.strip(), 300))
+                                    yield AssistantTextEvent(
+                                        text=_preview(text.strip(), 300)
+                                    )
                                 case (
                                     TextBlock()
                                     | ThinkingBlock()
@@ -176,26 +230,61 @@ class ClaudeSdkRunner:
                         session_id=session_id,
                         total_cost_usd=total_cost_usd,
                     ):
+                        if is_goal and _is_goal_unavailable(result):
+                            yield AssistantTextEvent(
+                                text=_goal_unavailable_notice()
+                            )
+                            restart_plain[0] = True
+                            return
                         yield ResultEvent(
                             result=result,
                             session_id=session_id,
                             total_cost_usd=total_cost_usd,
                         )
+                        return
                     case ResultMessage(is_error=True, errors=errors):
                         yield ErrorEvent(
-                            message="; ".join(errors or ["Claude supervisor failed"])
+                            message="; ".join(
+                                errors or ["Claude supervisor failed"]
+                            )
                         )
+                        # A ResultMessage is terminal. Stop here so the wrapped
+                        # exception the SDK then raises for the same failure
+                        # (e.g. max_turns) does not become a second ErrorEvent.
+                        return
+                    case SystemMessage() as system_message:
+                        if getattr(system_message, "subtype", None) == "init":
+                            commands = _slash_commands(
+                                getattr(system_message, "data", None)
+                            )
+                            if is_goal and "goal" not in commands:
+                                yield AssistantTextEvent(
+                                    text=_goal_unavailable_notice()
+                                )
+                                restart_plain[0] = True
+                                return
+                            if is_goal:
+                                yield AssistantTextEvent(
+                                    text=_goal_active_notice(commands)
+                                )
+                        continue
                     case (
                         UserMessage()
-                        | SystemMessage()
                         | StreamEvent()
                         | RateLimitEvent()
                     ):
                         continue
                     case unreachable:
                         assert_never(unreachable)
-        except ClaudeSDKError as error:
+        except Exception as error:  # noqa: BLE001
+            # Stream boundary: every failure — including the plain Exception the
+            # SDK raises when a run hits max_turns — must surface as a typed
+            # ErrorEvent so the NDJSON stream ends cleanly instead of breaking.
             yield ErrorEvent(message=str(error))
+        finally:
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
 
 def _build_agents(
@@ -214,6 +303,35 @@ def _build_agents(
             kwargs["skills"] = defn.skills
         result[name] = AgentDefinition(**kwargs)
     return result
+
+
+def _slash_commands(data: object) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    mapping = cast("dict[str, object]", data)
+    commands = mapping.get("slash_commands")
+    if not isinstance(commands, list):
+        return []
+    return [str(command) for command in cast("list[object]", commands)]
+
+
+def _goal_active_notice(commands: list[str]) -> str:
+    return (
+        "[goal-mode] /goal active; running until the completion condition is met "
+        f"(loop available={'loop' in commands})"
+    )
+
+
+def _goal_unavailable_notice() -> str:
+    return (
+        "[goal-mode] /goal not exposed; restarting with a plain prompt -- to "
+        "enable it, ensure the workspace is trusted and hooks are not disabled"
+    )
+
+
+def _is_goal_unavailable(result: str) -> bool:
+    stripped = result.lstrip()
+    return stripped.startswith("/goal") and "available" in result.lower()
 
 
 def _completion_status(
