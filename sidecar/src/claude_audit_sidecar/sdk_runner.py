@@ -1,6 +1,5 @@
 from collections.abc import AsyncIterator
-from contextlib import aclosing
-from typing import Literal, assert_never
+from typing import Literal, assert_never, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -177,103 +176,110 @@ class ClaudeSdkRunner:
     ) -> AsyncIterator[SidecarEvent]:
         active: dict[str, str] = {}
         completed = 0
+        stream = query(prompt=prompt, options=options)
         try:
-            async with aclosing(query(prompt=prompt, options=options)) as stream:
-                async for message in stream:
-                    match message:
-                        case TaskStartedMessage(
-                            task_id=task_id,
+            async for message in stream:
+                match message:
+                    case TaskStartedMessage(
+                        task_id=task_id,
+                        description=description,
+                        task_type=task_type,
+                    ):
+                        agent = task_type or task_id
+                        active[task_id] = agent
+                        yield SubagentStartedEvent(
+                            agent=agent,
                             description=description,
-                            task_type=task_type,
-                        ):
-                            agent = task_type or task_id
-                            active[task_id] = agent
-                            yield SubagentStartedEvent(
-                                agent=agent,
-                                description=description,
+                        )
+                    case TaskNotificationMessage(
+                        task_id=task_id,
+                        status=status,
+                        summary=summary,
+                    ):
+                        completed += 1
+                        agent = active.pop(task_id, task_id)
+                        yield SubagentCompletedEvent(
+                            agent=agent,
+                            status=_completion_status(status),
+                            completed=completed,
+                            total=max(completed, completed + len(active)),
+                            result_size=_result_size(summary),
+                            preview=_preview(summary),
+                        )
+                    case AssistantMessage(content=content):
+                        for block in content:
+                            match block:
+                                case TextBlock(text=text) if text.strip():
+                                    yield AssistantTextEvent(
+                                        text=_preview(text.strip(), 300)
+                                    )
+                                case (
+                                    TextBlock()
+                                    | ThinkingBlock()
+                                    | ToolUseBlock()
+                                    | ToolResultBlock()
+                                    | ServerToolUseBlock()
+                                    | ServerToolResultBlock()
+                                ):
+                                    continue
+                                case unreachable:
+                                    assert_never(unreachable)
+                    case ResultMessage(
+                        is_error=False,
+                        result=str() as result,
+                        session_id=session_id,
+                        total_cost_usd=total_cost_usd,
+                    ):
+                        if is_goal and _is_goal_unavailable(result):
+                            yield AssistantTextEvent(
+                                text=_goal_unavailable_notice()
                             )
-                        case TaskNotificationMessage(
-                            task_id=task_id,
-                            status=status,
-                            summary=summary,
-                        ):
-                            completed += 1
-                            agent = active.pop(task_id, task_id)
-                            yield SubagentCompletedEvent(
-                                agent=agent,
-                                status=_completion_status(status),
-                                completed=completed,
-                                total=max(completed, completed + len(active)),
-                                result_size=_result_size(summary),
-                                preview=_preview(summary),
-                            )
-                        case AssistantMessage(content=content):
-                            for block in content:
-                                match block:
-                                    case TextBlock(text=text) if text.strip():
-                                        yield AssistantTextEvent(
-                                            text=_preview(text.strip(), 300)
-                                        )
-                                    case (
-                                        TextBlock()
-                                        | ThinkingBlock()
-                                        | ToolUseBlock()
-                                        | ToolResultBlock()
-                                        | ServerToolUseBlock()
-                                        | ServerToolResultBlock()
-                                    ):
-                                        continue
-                                    case unreachable:
-                                        assert_never(unreachable)
-                        case ResultMessage(
-                            is_error=False,
-                            result=str() as result,
+                            restart_plain[0] = True
+                            return
+                        yield ResultEvent(
+                            result=result,
                             session_id=session_id,
                             total_cost_usd=total_cost_usd,
-                        ):
-                            if is_goal and _is_goal_unavailable(result):
+                        )
+                    case ResultMessage(is_error=True, errors=errors):
+                        yield ErrorEvent(
+                            message="; ".join(
+                                errors or ["Claude supervisor failed"]
+                            )
+                        )
+                    case SystemMessage() as system_message:
+                        if getattr(system_message, "subtype", None) == "init":
+                            commands = _slash_commands(
+                                getattr(system_message, "data", None)
+                            )
+                            if is_goal and "goal" not in commands:
                                 yield AssistantTextEvent(
                                     text=_goal_unavailable_notice()
                                 )
                                 restart_plain[0] = True
                                 return
-                            yield ResultEvent(
-                                result=result,
-                                session_id=session_id,
-                                total_cost_usd=total_cost_usd,
-                            )
-                        case ResultMessage(is_error=True, errors=errors):
-                            yield ErrorEvent(
-                                message="; ".join(
-                                    errors or ["Claude supervisor failed"]
+                            if is_goal:
+                                yield AssistantTextEvent(
+                                    text=_goal_active_notice(commands)
                                 )
-                            )
-                        case SystemMessage() as system_message:
-                            if getattr(system_message, "subtype", None) == "init":
-                                commands = _slash_commands(
-                                    getattr(system_message, "data", None)
-                                )
-                                if is_goal and "goal" not in commands:
-                                    yield AssistantTextEvent(
-                                        text=_goal_unavailable_notice()
-                                    )
-                                    restart_plain[0] = True
-                                    return
-                                if is_goal:
-                                    yield AssistantTextEvent(
-                                        text=_goal_active_notice(commands)
-                                    )
-                            continue
-                        case (
-                            UserMessage()
-                            | StreamEvent()
-                            | RateLimitEvent()
-                        ):
-                            continue
-                        case unreachable:
-                            assert_never(unreachable)
-        except ClaudeSDKError as error:
+                        continue
+                    case (
+                        UserMessage()
+                        | StreamEvent()
+                        | RateLimitEvent()
+                    ):
+                        continue
+                    case unreachable:
+                        assert_never(unreachable)
+        except Exception as error:  # noqa: BLE001
+            # Stream boundary: every failure — including the plain Exception the
+            # SDK raises when a run hits max_turns — must surface as a typed
+            # ErrorEvent so the NDJSON stream ends cleanly instead of breaking.
             yield ErrorEvent(message=str(error))
+        finally:
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
 
 def _build_agents(
@@ -295,11 +301,13 @@ def _build_agents(
 
 
 def _slash_commands(data: object) -> list[str]:
-    if isinstance(data, dict):
-        commands = data.get("slash_commands")
-        if isinstance(commands, list):
-            return [str(command) for command in commands]
-    return []
+    if not isinstance(data, dict):
+        return []
+    mapping = cast("dict[str, object]", data)
+    commands = mapping.get("slash_commands")
+    if not isinstance(commands, list):
+        return []
+    return [str(command) for command in cast("list[object]", commands)]
 
 
 def _goal_active_notice(commands: list[str]) -> str:
