@@ -7,6 +7,23 @@ sinks, including `RestTemplate`, Java `HttpClient`, Apache HTTP clients, URL
 stream APIs, webhook callbacks, import-by-URL flows, image/PDF fetchers, and
 HTTP proxy/forwarder utilities.
 
+## Proxy And Forwarder Endpoints (Request-Controlled By Default)
+
+A proxy/forwarder/gateway endpoint whose purpose is forwarding a caller-supplied
+URL or path — e.g. a `request` / `forward` / `distribute` / `route` method on a
+backend/gateway/proxy client — is request-controlled by default. Do NOT classify
+its outbound target as "server-configured" or "internal backend call" unless you
+have traced that no request field reaches the URL, path, host, port, or query.
+Custom forwarder clients (not just `RestTemplate` / `HttpClient` / `openConnection`)
+count as outbound SSRF sinks. The forwarder often sits behind an interface →
+delegate-impl indirection; follow it to the method that builds and issues the
+remote request before concluding the URL is fixed.
+
+When such an endpoint applies a `contains()` / `startsWith()` / substring allowlist
+on the full URL string, treat it as bypassable (e.g. appending an allowed token as
+a query parameter — `/internal/cmd?x=/allowed/path`) and confirm the bypass reaches
+a sensitive internal handler.
+
 ## Candidate Fields That Matter
 
 - `entryPoint`: the external route and controllable parameter.

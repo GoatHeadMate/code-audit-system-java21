@@ -70,10 +70,7 @@ final class DangerousSinkClassifier {
         if ("transferTo".equals(method)) {
             return match("FILE_WRITE", expression);
         }
-        if (("openConnection".equals(method)
-                || Set.of("send", "sendAsync", "exchange").contains(method))
-                && (lowerExpression.contains("http")
-                || lowerExpression.contains("resttemplate"))) {
+        if (isOutboundHttp(method, lowerExpression, lowerType)) {
             return match("OUTBOUND_HTTP", expression);
         }
         if (Set.of("load", "loadLibrary").contains(method)
@@ -87,6 +84,38 @@ final class DangerousSinkClassifier {
             }
         }
         return null;
+    }
+
+    private boolean isOutboundHttp(
+            String method,
+            String lowerExpression,
+            String lowerType
+    ) {
+        // Standard outbound HTTP client APIs.
+        if (("openConnection".equals(method)
+                || Set.of("send", "sendAsync", "exchange").contains(method))
+                && (lowerExpression.contains("http")
+                || lowerExpression.contains("resttemplate"))) {
+            return true;
+        }
+        // Project-specific HTTP proxy/forwarder/gateway clients: a forwarding-style
+        // method on a client/proxy/gateway/backend receiver carries a caller-supplied
+        // URL or path to a remote endpoint (e.g. BackendXxxClient.distributeRequest,
+        // XxxProxy.forward, XxxGateway.route). Generic by naming — not hardcoded to a
+        // single project class — so SSRF candidates surface for custom forwarders that
+        // are not standard HTTP APIs. Extra recall here is reviewed by the SSRF hunter.
+        String lowerMethod = method.toLowerCase(Locale.ROOT);
+        boolean forwardingMethod = containsAny(
+                lowerMethod,
+                "request", "forward", "proxy", "distribute", "relay", "dispatch",
+                "route"
+        );
+        boolean clientReceiver = containsAny(
+                lowerType + " " + lowerExpression,
+                "client", "proxy", "gateway", "backend", "forwarder", "feign",
+                "webclient"
+        );
+        return forwardingMethod && clientReceiver;
     }
 
     private boolean isSqlExecution(

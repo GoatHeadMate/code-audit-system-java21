@@ -63,6 +63,15 @@ Option injection is valid when user input can begin with `-` or `--` and change
 security-sensitive command behavior such as output path, config file, plugin,
 script, upload target, proxy, or execution mode.
 
+A legality/sanitizer check (such as `checkCommandLegal`, a metacharacter regex, or
+an allowlist validator) suppresses a finding ONLY when it is invoked on this exact
+call path before the sink. Do not assume it applies because sibling methods in the
+same class call it — verify the call is present on the path under review. Array-form
+`Runtime.exec(String[])` / `ProcessBuilder` is NOT inherently safe: when a
+request-controlled value becomes an argument and no on-path legality check runs,
+confirm argument or option injection (e.g. `checkName`/`field`/`name` flowing into
+`Runtime.exec(new String[]{...})` without an on-path allowlist).
+
 ## Expression And Template Execution Conditions
 
 | Condition | Verdict | Severity |
