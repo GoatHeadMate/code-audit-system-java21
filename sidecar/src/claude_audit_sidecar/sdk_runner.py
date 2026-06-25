@@ -49,9 +49,14 @@ _READ_ONLY_TOOLS = ["Agent", "SendMessage", "Read", "Glob", "Grep"]
 # the real mechanism behind the prose "goal mode" hint above. It is delivered as
 # the FIRST characters of the query prompt, not via a ClaudeAgentOptions field.
 # Requires a trusted workspace with hooks enabled; if `goal` is absent from the
-# init message's slash_commands the line degrades to a plain (still valid)
-# instruction. /loop is deliberately NOT used: it is a scheduled, repeating
-# bundled skill that needs a long-lived ClaudeSDKClient, not a one-shot query().
+# init message's slash_commands we restart with a plain prompt instead. /loop is
+# deliberately NOT used: it is a scheduled, repeating bundled skill that needs a
+# long-lived ClaudeSDKClient, not a one-shot query().
+#
+# IMPORTANT: the CLI treats the WHOLE /goal message as the completion condition,
+# which it caps at 4000 characters. So the directive below must stay short and the
+# full audit task is delivered via the system prompt (see _supervise_options'
+# task_context) rather than appended after the directive.
 _GOAL_DIRECTIVE = (
     "/goal 完成本次白盒安全审计, 在满足以下全部完成条件前不要结束: "
     "(1) 已按本会话的选择策略与上限为每个最终选中的 Hunter 委派其对应子代理 "
@@ -112,7 +117,14 @@ class ClaudeSdkRunner:
         self,
         request: SuperviseRequest,
         agents: dict[str, AgentDefinition],
+        task_context: str | None = None,
     ) -> ClaudeAgentOptions:
+        # In goal mode the full audit task rides in the system prompt (no length
+        # limit) because the /goal user message is capped at 4000 chars; the plain
+        # fallback leaves the task in the user prompt and appends nothing here.
+        append = _SUPERVISOR_SYSTEM_PROMPT
+        if task_context:
+            append = f"{append}\n\n{task_context}"
         return ClaudeAgentOptions(
             tools=_READ_ONLY_TOOLS,
             allowed_tools=_READ_ONLY_TOOLS,
@@ -131,7 +143,7 @@ class ClaudeSdkRunner:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": _SUPERVISOR_SYSTEM_PROMPT,
+                "append": append,
             },
             agents=agents,
             skills="all",
@@ -146,15 +158,20 @@ class ClaudeSdkRunner:
         request: SuperviseRequest,
     ) -> AsyncIterator[SidecarEvent]:
         agents = _build_agents(request.agents) if request.agents else {}
-        options = self._supervise_options(request, agents)
         plain_prompt = request.prompt
-        goal_prompt = f"{_GOAL_DIRECTIVE}\n\n{plain_prompt}"
-        # Drive the run with /goal first. If this session does not expose the
-        # `goal` slash command (seen in the init message) or the CLI returns the
-        # "/goal isn't available" sentinel, transparently RESTART with the plain
-        # prompt — so the supervisor result is always a real audit envelope, never
-        # the slash-command error string.
-        for is_goal, prompt in ((True, goal_prompt), (False, plain_prompt)):
+        # Drive the run with /goal first. The goal attempt sends only the short
+        # _GOAL_DIRECTIVE as the user prompt (the 4000-char-capped completion
+        # condition) and carries the full task in the system prompt. If this
+        # session does not expose the `goal` slash command (seen in the init
+        # message) or the CLI returns the "/goal isn't available" sentinel,
+        # transparently RESTART with the plain prompt — so the supervisor result
+        # is always a real audit envelope, never the slash-command error string.
+        attempts = (
+            (True, _GOAL_DIRECTIVE, plain_prompt),
+            (False, plain_prompt, None),
+        )
+        for is_goal, prompt, task_context in attempts:
+            options = self._supervise_options(request, agents, task_context)
             restart_plain = [False]
             async for event in self._stream_attempt(
                 prompt,
