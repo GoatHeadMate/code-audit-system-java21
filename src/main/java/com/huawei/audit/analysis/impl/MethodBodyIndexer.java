@@ -1,12 +1,17 @@
 package com.huawei.audit.analysis.impl;
 
 import com.github.javaparser.ast.Node;
+import com.github.javaparser.ast.NodeList;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.Expression;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.expr.MethodReferenceExpr;
 import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.stmt.ForEachStmt;
+import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
+import com.huawei.audit.analysis.WhiteBoxAnalysisService.Assignment;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.CallSite;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.Sink;
 import com.huawei.audit.analysis.WhiteBoxAnalysisService.StorageAccess;
@@ -24,6 +29,8 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
     private final List<CallSite> calls = new ArrayList<>();
     private final List<String> methodReferences = new ArrayList<>();
     private final List<StorageAccess> storageAccesses = new ArrayList<>();
+    private final List<Assignment> assignments = new ArrayList<>();
+    private final List<String> returnExpressions = new ArrayList<>();
     private final DangerousSinkClassifier sinkClassifier;
     private final StorageAccessClassifier storageClassifier =
             new StorageAccessClassifier();
@@ -51,6 +58,43 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
                 tree.getNameAsString(),
                 AnalysisTextUtils.simpleName(tree.getType().asString())
         );
+        tree.getInitializer().ifPresent(init ->
+                assignments.add(new Assignment(
+                        tree.getNameAsString(),
+                        source.sourceText(init, 300)
+                )));
+        super.visit(tree, unused);
+    }
+
+    @Override
+    public void visit(AssignExpr tree, Void unused) {
+        String target = tree.getTarget().toString().split("[.\\[(]", 2)[0];
+        assignments.add(new Assignment(
+                target,
+                source.sourceText(tree.getValue(), 300)
+        ));
+        super.visit(tree, unused);
+    }
+
+    @Override
+    public void visit(ForEachStmt tree, Void unused) {
+        // A for-each binding `for (X v : iterable)` makes v derive from iterable:
+        // model it as an assignment v = iterable so taint flows from a tainted
+        // collection into the loop variable (e.g. iterating a tainted Map).
+        var declarators = tree.getVariable().getVariables();
+        if (!declarators.isEmpty()) {
+            assignments.add(new Assignment(
+                    declarators.get(0).getNameAsString(),
+                    source.sourceText(tree.getIterable(), 200)
+            ));
+        }
+        super.visit(tree, unused);
+    }
+
+    @Override
+    public void visit(ReturnStmt tree, Void unused) {
+        tree.getExpression().ifPresent(expr ->
+                returnExpressions.add(source.sourceText(expr, 300)));
         super.visit(tree, unused);
     }
 
@@ -164,6 +208,14 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
         return storageAccesses;
     }
 
+    List<Assignment> assignments() {
+        return assignments;
+    }
+
+    List<String> returnExpressions() {
+        return returnExpressions;
+    }
+
     private void addSink(String category, String api, Node node) {
         sinks.add(new Sink(
                 "sink-" + (sinks.size() + 1),
@@ -172,8 +224,36 @@ final class MethodBodyIndexer extends VoidVisitorAdapter<Void> {
                 methodId,
                 source.filePath(),
                 source.line(node, true),
-                source.sourceText(node, 500)
+                source.sourceText(node, 500),
+                sinkArguments(node)
         ));
+    }
+
+    /**
+     * Source text of the arguments passed to a sink call/constructor, so the
+     * candidate carries "what flows into the dangerous operation" (e.g. the
+     * command string passed to {@code ProcessBuilder}/{@code exec}), not just
+     * "this method contains a sink". Generic over any sink call — no project or
+     * API specifics. Empty when the sink node carries no arguments.
+     */
+    private String sinkArguments(Node node) {
+        NodeList<Expression> arguments = null;
+        if (node instanceof MethodCallExpr call) {
+            arguments = call.getArguments();
+        } else if (node instanceof ObjectCreationExpr creation) {
+            arguments = creation.getArguments();
+        }
+        if (arguments == null || arguments.isEmpty()) {
+            return "";
+        }
+        List<String> parts = new ArrayList<>();
+        for (Expression argument : arguments) {
+            String text = source.sourceText(argument, 120);
+            if (!text.isBlank()) {
+                parts.add(text);
+            }
+        }
+        return String.join(", ", parts);
     }
 
     private String receiverType(String receiver) {

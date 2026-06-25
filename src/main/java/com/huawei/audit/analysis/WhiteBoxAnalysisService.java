@@ -46,8 +46,24 @@ public interface WhiteBoxAnalysisService {
             String methodId,
             String filePath,
             int line,
-            String code
-    ) { }
+            String code,
+            String dangerousArg
+    ) {
+        // Backward-compatible constructor for sink producers that do not capture
+        // the dangerous argument expression (entry/filter/XML/config/derived
+        // sinks). Only call-site sinks with explicit arguments fill dangerousArg.
+        public Sink(
+                String id,
+                String category,
+                String api,
+                String methodId,
+                String filePath,
+                int line,
+                String code
+        ) {
+            this(id, category, api, methodId, filePath, line, code, "");
+        }
+    }
 
     record MethodNode(
             String id,
@@ -62,7 +78,40 @@ public interface WhiteBoxAnalysisService {
             List<CallSite> calls,
             Map<String, String> variableTypes,
             List<String> methodReferences,
-            List<StorageAccess> storageAccesses
+            List<StorageAccess> storageAccesses,
+            List<Assignment> assignments,
+            List<String> returnExpressions
+    ) {
+        // Backward-compatible constructor for callers that predate intra-method
+        // assignment/return capture (e.g. tests). Defaults the new fields empty.
+        public MethodNode(
+                String id,
+                String className,
+                String methodName,
+                int parameterCount,
+                List<String> parameterNames,
+                String filePath,
+                int startLine,
+                int endLine,
+                String signature,
+                List<CallSite> calls,
+                Map<String, String> variableTypes,
+                List<String> methodReferences,
+                List<StorageAccess> storageAccesses
+        ) {
+            this(id, className, methodName, parameterCount, parameterNames,
+                    filePath, startLine, endLine, signature, calls,
+                    variableTypes, methodReferences, storageAccesses,
+                    List.of(), List.of());
+        }
+    }
+
+    /** An intra-method assignment {@code target = value} (declarator initializer,
+     *  plain assignment, or for-each binding), captured as source text so the
+     *  taint summarizer can do expression-level propagation. */
+    record Assignment(
+            String target,
+            String value
     ) { }
 
     record CallSite(

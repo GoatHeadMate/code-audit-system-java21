@@ -215,7 +215,9 @@ final class CompilationUnitIndexer extends VoidVisitorAdapter<Void> {
                 List.copyOf(body.calls()),
                 Map.copyOf(body.variableTypes()),
                 List.copyOf(body.methodReferences()),
-                List.copyOf(body.storageAccesses())
+                List.copyOf(body.storageAccesses()),
+                List.copyOf(body.assignments()),
+                List.copyOf(body.returnExpressions())
         ));
     }
 

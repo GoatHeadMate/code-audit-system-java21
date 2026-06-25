@@ -116,6 +116,8 @@ final class TaintFlowVerifier {
                     nextTaintedParams.add(flow.targetArgIndex());
 
                     String propDesc = switch (flow.propagationType()) {
+                        case "template-substitution" ->
+                                "via ${...} template substitution into command/query text";
                         case "replace" -> "via String.replace() template substitution";
                         case "format" -> "via String.format()";
                         case "concatenation" -> "via string concatenation";
@@ -124,7 +126,8 @@ final class TaintFlowVerifier {
                         default -> "via direct argument passing";
                     };
 
-                    if ("replace".equals(flow.propagationType())
+                    if ("template-substitution".equals(flow.propagationType())
+                            || "replace".equals(flow.propagationType())
                             || "format".equals(flow.propagationType())
                             || "split".equals(flow.propagationType())) {
                         hasStringPropagation = true;
