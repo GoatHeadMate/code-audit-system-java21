@@ -68,6 +68,7 @@ public class AgentScopeGateway implements ClaudeGateway {
         List<SubagentDeclaration> declarations = buildSubagents(agents);
         AtomicReference<String> result = new AtomicReference<>("");
         AtomicInteger completed = new AtomicInteger();
+        AgentScopeTextBuffer textBuffer = new AgentScopeTextBuffer();
 
         try (HarnessAgent agent = baseBuilder(workingDirectory, declarations)
                 .name("audit-supervisor")
@@ -76,8 +77,18 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .build()) {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
-                    .doOnNext(event -> handleEvent(event, result, completed, eventConsumer))
+                    .doOnNext(event -> handleEvent(
+                            event,
+                            result,
+                            completed,
+                            textBuffer,
+                            eventConsumer
+                    ))
                     .blockLast(properties.timeout());
+        }
+        textBuffer.flush(eventConsumer);
+        if (result.get().isBlank() && !textBuffer.transcript().isBlank()) {
+            result.set(textBuffer.transcript());
         }
 
         if (result.get().isBlank()) {
@@ -190,10 +201,16 @@ public class AgentScopeGateway implements ClaudeGateway {
                 You are the Java AgentScope supervisor for a white-box security audit.
                 Work autonomously. Use agent_spawn to delegate selected evidence packages to
                 the registered hunter subagents when their category is relevant.
+                Do not use background, async, fire-and-forget, or timeout_seconds=0
+                subagent calls. Every agent_spawn call must wait for a returned result with a
+                non-zero timeout before you continue.
+                Never finish immediately after scheduling hunters. Read every selected
+                subagent result, then synthesize the final answer.
                 Source root: %s
                 Available hunter subagents: %s
-                Return exactly one final JSON object with fields:
+                The final assistant message must be exactly one JSON object with fields:
                 selected_hunters, rationale, findings.
+                Do not include prose outside that final JSON object.
                 """.formatted(
                 sourceRoot.toAbsolutePath().normalize(),
                 subagentNames
@@ -204,23 +221,25 @@ public class AgentScopeGateway implements ClaudeGateway {
             AgentEvent event,
             AtomicReference<String> result,
             AtomicInteger completed,
+            AgentScopeTextBuffer textBuffer,
             Consumer<String> eventConsumer
     ) {
         switch (event.getType()) {
             case TEXT_BLOCK_DELTA -> {
                 if (event instanceof TextBlockDeltaEvent text
                         && !text.getDelta().isBlank()) {
-                    eventConsumer.accept("[agentscope-supervisor] "
-                            + preview(text.getDelta()));
+                    textBuffer.append(text.getDelta(), eventConsumer);
                 }
             }
             case TOOL_CALL_START -> {
+                textBuffer.flush(eventConsumer);
                 if (event instanceof ToolCallStartEvent tool
                         && "agent_spawn".equals(tool.getToolCallName())) {
                     eventConsumer.accept("[subagent-start] START agent_spawn");
                 }
             }
             case TOOL_RESULT_END -> {
+                textBuffer.flush(eventConsumer);
                 if (event instanceof ToolResultEndEvent tool
                         && "agent_spawn".equals(tool.getToolCallName())) {
                     int count = completed.incrementAndGet();
@@ -230,11 +249,13 @@ public class AgentScopeGateway implements ClaudeGateway {
                 }
             }
             case AGENT_RESULT -> {
+                textBuffer.flush(eventConsumer);
                 if (event instanceof AgentResultEvent agentResult) {
                     result.set(agentResult.getResult().getTextContent());
                 }
             }
             case EXCEED_MAX_ITERS -> {
+                textBuffer.flush(eventConsumer);
                 if (event instanceof ExceedMaxItersEvent maxIters) {
                     throw new IllegalStateException(
                             "AgentScope exceeded max iterations: "
@@ -251,12 +272,5 @@ public class AgentScopeGateway implements ClaudeGateway {
 
     private String status(ToolResultState state) {
         return state == ToolResultState.SUCCESS ? "DONE" : state.name();
-    }
-
-    private String preview(String text) {
-        String flattened = text.replace("\n", " | ");
-        return flattened.length() <= 300
-                ? flattened
-                : flattened.substring(0, 300) + "...";
     }
 }
