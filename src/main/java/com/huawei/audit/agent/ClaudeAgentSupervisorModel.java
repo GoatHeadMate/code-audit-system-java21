@@ -61,16 +61,16 @@ public class ClaudeAgentSupervisorModel implements ChatModel {
             );
             if (response.isBlank()) {
                 throw new IllegalStateException(
-                        "Claude Agent supervisor returned no final result"
+                        "AgentScope supervisor returned no final result"
                 );
             }
             return ChatResponse.builder()
                     .aiMessage(AiMessage.from(response))
-                    .modelName("claude-agent-sdk-supervisor")
+                    .modelName("agentscope-java-supervisor")
                     .build();
         } catch (Exception exception) {
             throw new IllegalStateException(
-                    "Claude Agent supervisor invocation failed",
+                    "AgentScope supervisor invocation failed",
                     exception
             );
         }

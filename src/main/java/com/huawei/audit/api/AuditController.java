@@ -228,13 +228,13 @@ public class AuditController {
         return Map.of(
                 "status", "ok",
                 "jobs", jobs.list().size(),
-                "claude_available", claudeGateway.available(),
-                "claude_runtime", "python-agent-sdk-sidecar",
+                "agent_available", claudeGateway.available(),
+                "agent_runtime", "agentscope-java-harness",
                 "intelligent_orchestrator", orchestratorProperties.enabled(),
                 "analysis_engine", "jdk-ast-whitebox",
-                "agent_framework", "langchain4j+langgraph4j",
-                "agent_topology", "one-supervisor+native-subagents",
-                "agent_transport", "http-ndjson",
+                "agent_framework", "agentscope-java+langgraph4j",
+                "agent_topology", "one-supervisor+agentscope-subagents",
+                "agent_transport", "in-process-java",
                 "scan_strategy", "candidate-path-whitebox"
         );
     }

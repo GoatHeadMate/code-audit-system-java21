@@ -69,11 +69,11 @@ class IntelligentAuditGraphTest {
         assertThat(result.finalFindings()).hasSize(2);
         assertThat(result.taskSummary())
                 .containsEntry("total_hunters", 2)
-                .containsEntry("claude_agent_sessions", 1)
+                .containsEntry("agentscope_sessions", 1)
                 .containsKey("analysis_coverage")
                 .containsEntry(
                         "subagent_mode",
-                        "native-claude-agent-sdk-subagents"
+                        "agentscope-java-harness-subagents"
                 );
     }
 

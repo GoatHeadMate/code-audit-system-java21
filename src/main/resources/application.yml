@@ -16,11 +16,15 @@ server:
 
 audit:
   workspace: ${AUDIT_WORKSPACE:workspace}
-  claude-sidecar-url: ${CLAUDE_SIDECAR_URL:http://127.0.0.1:8011}
-  claude-sidecar-token: ${CLAUDE_SIDECAR_TOKEN:}
-  claude-sidecar-timeout: ${CLAUDE_SIDECAR_TIMEOUT:30m}
+  agentscope:
+    provider: ${AGENTSCOPE_PROVIDER:anthropic}
+    model: ${AGENTSCOPE_MODEL:claude-sonnet-4-5-20250929}
+    api-key: ${AGENTSCOPE_API_KEY:${ANTHROPIC_API_KEY:}}
+    base-url: ${AGENTSCOPE_BASE_URL:}
+    max-iters: ${AGENTSCOPE_MAX_ITERS:80}
+    timeout: ${AGENTSCOPE_TIMEOUT:30m}
   max-concurrent-jobs: ${MAX_CONCURRENT_JOBS:2}
-  # Limits concurrent evidence preparation tasks; Claude uses one Supervisor session.
+  # Limits concurrent evidence preparation tasks; AgentScope uses one Supervisor session.
   max-concurrent-hunters: ${MAX_CONCURRENT_HUNTERS:15}
   hunter-timeout: ${HUNTER_TIMEOUT:30m}
   orchestrator:

@@ -41,19 +41,19 @@ class CodeAuditApplicationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.analysis_engine").value("jdk-ast-whitebox"))
                 .andExpect(jsonPath("$.scan_strategy").value("candidate-path-whitebox"))
-                .andExpect(jsonPath("$.claude_runtime")
-                        .value("python-agent-sdk-sidecar"))
-                .andExpect(jsonPath("$.agent_transport").value("http-ndjson"));
+                .andExpect(jsonPath("$.agent_runtime")
+                        .value("agentscope-java-harness"))
+                .andExpect(jsonPath("$.agent_transport").value("in-process-java"));
     }
 
     @Test
-    void frontendBrandsTheActiveWhiteBoxClaudeWorkflow() throws Exception {
+    void frontendBrandsTheActiveWhiteBoxAgentScopeWorkflow() throws Exception {
         String html = Files.readString(Path.of(
                 "src", "main", "resources", "static", "index.html"
         ));
 
         org.assertj.core.api.Assertions.assertThat(html)
-                .contains("Java 白盒分析 + Claude")
+                .contains("Java 白盒分析 + AgentScope")
                 .contains("/audit/interfaces")
                 .contains("选择检测接口");
     }

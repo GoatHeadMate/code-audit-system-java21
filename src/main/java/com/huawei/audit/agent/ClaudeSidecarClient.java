@@ -14,9 +14,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import org.springframework.stereotype.Component;
 
-@Component
 public class ClaudeSidecarClient implements ClaudeGateway {
     private final URI baseUri;
     private final String apiToken;

@@ -10,6 +10,7 @@ import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -64,11 +65,11 @@ public class SupervisorAgent {
             Map<String, Object> analysisSummary
     ) throws Exception {
         Map<String, ClaudeGateway.AgentDef> agents = buildAgentDefs(
-                sourceRoot, candidates, evidenceManifest, skillManifest
+                job.workDir(), sourceRoot, candidates, evidenceManifest, skillManifest
         );
         logs.publish(
                 job,
-                "[supervisor-agent] starting one Claude Agent SDK session"
+                "[supervisor-agent] starting one AgentScope Java supervisor"
                         + " with " + agents.size() + " pre-defined agents: "
                         + String.join(", ", agents.keySet())
         );
@@ -122,11 +123,12 @@ public class SupervisorAgent {
     }
 
     private Map<String, ClaudeGateway.AgentDef> buildAgentDefs(
+            Path workDirectory,
             Path sourceRoot,
             List<String> candidates,
             Map<String, String> evidenceManifest,
             Map<String, String> skillManifest
-    ) {
+    ) throws IOException {
         Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
         List<String> readOnlyTools = List.of("Read", "Glob", "Grep");
@@ -141,12 +143,15 @@ public class SupervisorAgent {
                     ? List.of()
                     : List.of(skillName);
             String skillRef = skillName == null ? "(none)" : skillName;
+            String skillContent = skillName == null
+                    ? "(none)"
+                    : readSkillContent(workDirectory, skillName);
             String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
                     hunter,
                     skillRef,
                     taskPath,
                     sourceRootStr,
-                    skillRef
+                    skillRef + "\n\n" + skillContent
             );
             agents.put(hunter, new ClaudeGateway.AgentDef(
                     "Audit " + hunter.replace('_', ' ')
@@ -158,6 +163,15 @@ public class SupervisorAgent {
             ));
         }
         return agents;
+    }
+
+    private String readSkillContent(Path workDirectory, String skillName)
+            throws IOException {
+        Path skill = workDirectory.resolve(".claude")
+                .resolve("skills")
+                .resolve(skillName)
+                .resolve("SKILL.md");
+        return Files.isRegularFile(skill) ? Files.readString(skill) : "(missing)";
     }
 
     private static String baseHunterName(String hunter) {

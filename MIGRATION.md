@@ -11,7 +11,7 @@ This project is independent from `D:\huawei\code-audit-system`.
 - Maximum 15 concurrent hunters on virtual threads
 - Pluggable entrypoint discovery with Spring MVC, JAX-RS and Huawei ROA support
 - JDK compiler AST method, invocation, interface implementation and sink index
-- Bounded entrypoint-to-sink candidate-path generation before Claude analysis
+- Bounded entrypoint-to-sink candidate-path generation before AgentScope analysis
 - Coverage reporting for entrypoint binding, parser diagnostics and unresolved calls
 - Evidence size limits and partial query error isolation
 - Technology profile, Hunter scheduling and finding normalization
@@ -19,21 +19,22 @@ This project is independent from `D:\huawei\code-audit-system`.
 - LangChain4j-backed intelligent Orchestrator decisions
 - LangGraph4j state graph with evidence preparation, one Supervisor session and
   deterministic finalization
-- Python Claude Agent SDK Sidecar with typed HTTP and NDJSON contracts
-- Native Claude custom Subagents generated per audit job
-- One Claude Agent SDK Supervisor session per audit job
+- Java AgentScope Harness integration
+- AgentScope custom Subagents generated per audit job
+- One AgentScope Supervisor session per audit job
 - SSE log streaming
 - Existing static frontend and 15 Hunter prompts
 
 ## Deliberate differences
 
-- Java keeps ownership of AST analysis and orchestration while the official
-  Python Claude Agent SDK runs in a local Sidecar.
+- Java keeps ownership of AST analysis and orchestration while AgentScope Java
+  runs the Supervisor and Hunter Subagents in-process.
 - One-shot LLM enrichment and Supervisor sessions share one Java
-  `ClaudeGateway`; no Java component invokes the Claude CLI directly.
-- The Supervisor can use only Agent/Read/Glob/Grep. Native Hunter Subagents can
-  use only Read/Glob/Grep.
-- Java prepares candidate call paths; Claude validates controllability,
+  `ClaudeGateway` contract backed by `AgentScopeGateway`; no Java component
+  invokes the Claude CLI or Python sidecar.
+- The Supervisor delegates to AgentScope Hunter Subagents and inherited
+  read-only workspace tools.
+- Java prepares candidate call paths; AgentScope validates controllability,
   security checks and exploitability.
 
 ## Remaining production work
@@ -43,4 +44,4 @@ This project is independent from `D:\huawei\code-audit-system`.
 - Add authentication, authorization and upload quotas.
 - Add Servlet, RPC, MQ and framework-specific `EntryPointDiscoverer` plugins.
 - Add bytecode call-graph fallback for missing or syntactically damaged source.
-- Add end-to-end audit fixtures that exercise real Claude credentials.
+- Add end-to-end audit fixtures that exercise real AgentScope provider credentials.

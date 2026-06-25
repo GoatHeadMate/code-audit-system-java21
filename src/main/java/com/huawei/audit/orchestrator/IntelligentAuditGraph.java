@@ -98,7 +98,7 @@ public class IntelligentAuditGraph {
         ExecutionContext context = context(state);
         logs.publish(
                 context.job(),
-                "[langgraph4j] preparing HTTP interface inventory for native subagents"
+                "[langgraph4j] preparing HTTP interface inventory for AgentScope subagents"
         );
         @SuppressWarnings("unchecked")
         List<Map<String, String>> dependencies = (List<Map<String, String>>)
@@ -169,8 +169,8 @@ public class IntelligentAuditGraph {
                 "supervisor_rationale",
                 state.value("supervisor_rationale", "")
         );
-        summary.put("claude_agent_sessions", 1);
-        summary.put("subagent_mode", "native-claude-agent-sdk-subagents");
+        summary.put("agentscope_sessions", 1);
+        summary.put("subagent_mode", "agentscope-java-harness-subagents");
         summary.put("scan_strategy", "candidate-path-whitebox");
         summary.put("analysis_coverage", state.analysisSummary());
         return Map.of(

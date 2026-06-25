@@ -1,6 +1,7 @@
 package com.huawei.audit;
 
 import com.huawei.audit.config.AuditProperties;
+import com.huawei.audit.config.AgentScopeProperties;
 import com.huawei.audit.config.OrchestratorProperties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -11,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
 @EnableConfigurationProperties({
+        AgentScopeProperties.class,
         AuditProperties.class,
         OrchestratorProperties.class
 })
