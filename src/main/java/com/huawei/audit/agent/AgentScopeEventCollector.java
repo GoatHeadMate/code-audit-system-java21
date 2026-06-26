@@ -86,7 +86,15 @@ final class AgentScopeEventCollector {
         if (!result.get().isBlank()) {
             return result.get();
         }
-        return buffer(SUPERVISOR_SOURCE).transcript();
+        String transcript = buffer(SUPERVISOR_SOURCE).transcript();
+        return looksLikeSupervisorEnvelope(transcript) ? transcript : "";
+    }
+
+    private boolean looksLikeSupervisorEnvelope(String text) {
+        return text != null
+                && text.contains("{")
+                && text.contains("\"selected_hunters\"")
+                && text.contains("\"findings\"");
     }
 
     private AgentScopeTextBuffer buffer(String source) {

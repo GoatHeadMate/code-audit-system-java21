@@ -108,17 +108,16 @@ public class SupervisorAgent {
         } catch (Exception parseException) {
             String preview = response == null ? "null"
                     : response.strip().substring(0, Math.min(200, response.strip().length()));
+            String message = "supervisor response unparseable: "
+                    + parseException.getMessage()
+                    + " | response preview: " + preview;
             logs.publish(
                     job,
                     "[supervisor-agent] failed to parse supervisor response: "
                             + parseException.getMessage()
                             + " | response preview: " + preview
             );
-            return new SupervisorResult(
-                    candidates,
-                    "supervisor response unparseable: " + parseException.getMessage(),
-                    List.of()
-            );
+            throw new IllegalStateException(message, parseException);
         }
     }
 
@@ -193,13 +192,16 @@ public class SupervisorAgent {
                 ════════════════════════════════════════════════════════════════
 
                 ════════════════════════════════════════════════════════════════
-                AGENT DELEGATION — USE PRE-DEFINED AGENTS BY NAME
+                AGENT DELEGATION — USE AGENTSCOPE agent_spawn
                 ════════════════════════════════════════════════════════════════
-                All hunter subagents are pre-registered by name. To invoke one,
-                use the Agent tool with subagent_type set to the hunter name.
-                Example: Agent(subagent_type: "code_execution", prompt: "Begin audit")
-                Each agent already has its judgment-rules skill, task file and source
-                root embedded in its definition. You only need to tell it to start.
+                All hunter subagents are pre-registered by name. Invoke them with
+                the provided `agent_spawn` tool and the exact hunter name.
+                Do not use Agent(...), SendMessage, memory_search, list_files,
+                read_file, glob_files, grep_files, or other direct source-discovery
+                tools from the supervisor for hunter work.
+                Each agent already has its judgment-rules skill, task file and
+                source root embedded in its definition. You only need to tell it
+                to start and then read the returned result.
                 ════════════════════════════════════════════════════════════════
 
                 Java has already built white-box candidate paths from external entrypoints
@@ -209,21 +211,23 @@ public class SupervisorAgent {
                 aggregate confirmed findings. Do not repeat broad source discovery yourself.
 
                 Rules:
-                1. Delegate each selected category to its matching pre-defined agent.
-                2. Launch independent agents in parallel waves, never exceeding the
+                1. Your first action after reading the user prompt must be one or
+                   more `agent_spawn` calls for selected hunter agents.
+                2. Delegate each selected category to its matching pre-defined agent.
+                3. Launch independent agents in parallel waves, never exceeding the
                    maximum parallel agents stated in the user prompt.
-                3. Code execution, authorization, unsafe parsing, file operations, SSRF
+                4. Code execution, authorization, unsafe parsing, file operations, SSRF
                    and component vulnerabilities are mandatory when available.
                    When a category is split into batch agents (e.g., code_execution_batch_1,
                    code_execution_batch_2), ALL batches are mandatory — each contains a
                    unique non-overlapping subset of candidates.
-                4. Delegate no more than the configured maximum and never invent names.
-                5. If a subagent returns an agentId and says "use SendMessage to continue",
-                   you MUST use SendMessage with that agentId to resume it.
-                6. Review returned findings, remove duplicates and obvious false positives.
+                5. Delegate no more than the configured maximum and never invent names.
+                6. If a subagent errors or times out, include that status in the
+                   rationale and continue with the other returned results.
+                7. Review returned findings, remove duplicates and obvious false positives.
                    Reject findings that name a sink but do not validate the candidate
                    entrypoint, dispatch path and attacker-controlled value flow.
-                7. Each finding MUST include these fields:
+                8. Each finding MUST include these fields:
                    rule_id, verdict (CONFIRM/DOWNGRADE/NEEDS_REVIEW), title,
                    severity (CRITICAL/HIGH/MEDIUM/LOW), confidence (HIGH/MEDIUM/LOW),
                    vuln_type (e.g. SQL_INJECTION, SSRF, XSS), file_path, start_line,
@@ -232,11 +236,11 @@ public class SupervisorAgent {
                    Omitting any of these fields makes the finding unparseable.
                    Do not return SUPPRESS items as findings; use them only to explain
                    why a candidate is not reported.
-                8. Before finalizing, verify each subagent confirmed it reviewed all
+                9. Before finalizing, verify each subagent confirmed it reviewed all
                    candidate chunks. If a subagent skipped chunks, resume it.
-                9. Return format:
+                10. Return format:
                    {"selected_hunters":["..."],"rationale":"...","findings":[...]}
-                10. After gathering all subagent findings, perform a CROSS-API CHAIN
+                11. After gathering all subagent findings, perform a CROSS-API CHAIN
                    COMPOSITION analysis before returning. Specifically:
                    a. If both SSRF and COMMAND_INJECTION/DESERIALIZATION findings exist,
                       check whether the SSRF target URL could reach the command injection
@@ -284,7 +288,7 @@ public class SupervisorAgent {
                 Technology profile:
                 %s
 
-                Pre-defined hunter agents (invoke by name via Agent tool):
+                Pre-defined hunter agents (invoke by exact name via agent_spawn):
                 %s
 
                 Total Hunters to delegate: %d
@@ -295,8 +299,11 @@ public class SupervisorAgent {
                 %s
 
                 DELEGATION INSTRUCTIONS:
-                Invoke each pre-defined agent by name. Example:
-                  Agent(subagent_type: "code_execution", prompt: "Begin audit")
+                Invoke each pre-defined agent by name with the AgentScope
+                `agent_spawn` tool. Your first action must be one or more
+                `agent_spawn` calls. Do not inspect source directly from the
+                supervisor with list_files, read_file, glob_files, grep_files,
+                or memory_search.
                 All agent definitions already contain their judgment-rules skill,
                 task file, and source root. You do not need to pass file paths in the prompt.
 

@@ -18,20 +18,41 @@ class AgentScopeEventCollectorTest {
                 logs::add
         );
 
-        collector.handle(new TextBlockDeltaEvent("r1", "b1", "Final {")
+        collector.handle(new TextBlockDeltaEvent("r1", "b1", "{")
                 .withSource("audit-supervisor"));
         collector.handle(new TextBlockDeltaEvent("r2", "b2", "hunter detail.")
                 .withSource("ssrf"));
-        collector.handle(new TextBlockDeltaEvent("r1", "b1", "\"findings\":[]}")
+        collector.handle(new TextBlockDeltaEvent(
+                "r1",
+                "b1",
+                "\"selected_hunters\":[],\"findings\":[]}"
+        )
                 .withSource("audit-supervisor"));
         collector.flushAll();
 
         assertThat(logs).containsExactly(
                 "[agentscope-ssrf] hunter detail.",
-                "[agentscope-supervisor] Final {\"findings\":[]}"
+                "[agentscope-supervisor] {\"selected_hunters\":[],\"findings\":[]}"
         );
         assertThat(collector.finalResult())
-                .isEqualTo("Final {\"findings\":[]}");
+                .isEqualTo("{\"selected_hunters\":[],\"findings\":[]}");
+    }
+
+    @Test
+    void planningTextIsNotAcceptedAsFinalResult() {
+        AgentScopeEventCollector collector = new AgentScopeEventCollector(
+                ignored -> {
+                }
+        );
+
+        collector.handle(new TextBlockDeltaEvent(
+                "r1",
+                "b1",
+                "I'll start by examining the project structure."
+        ).withSource("audit-supervisor"));
+        collector.flushAll();
+
+        assertThat(collector.finalResult()).isBlank();
     }
 
     @Test

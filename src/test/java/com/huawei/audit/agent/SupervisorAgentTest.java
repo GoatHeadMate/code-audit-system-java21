@@ -1,6 +1,7 @@
 package com.huawei.audit.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -148,6 +149,49 @@ class SupervisorAgentTest {
         assertThat(result.findings().getFirst())
                 .containsEntry("rule_id", "sqli-mybatis-unsafe")
                 .containsEntry("vulnerability_type", "SQL_INJECTION");
+        assertThat(job.workDir().resolve("supervisor-response.txt"))
+                .isRegularFile();
+    }
+
+    @Test
+    void rejectsPlanningTextInsteadOfReturningEmptyFindings()
+            throws Exception {
+        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
+        when(model.supervise(any(), any(), any(), any(), any())).thenReturn(
+                "I'll start by examining the project structure, then delegate."
+        );
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                model,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5,
+                        80
+                ),
+                new JobLogBroker()
+        );
+        AuditJob job = new AuditJob("plain123", "java");
+        job.workDir(tempDir.resolve("audit_plain123"));
+        java.nio.file.Files.createDirectories(job.workDir());
+
+        assertThatThrownBy(() -> supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("code_execution", "authorization", "ssrf"),
+                Map.of(),
+                Map.of(),
+                Map.of()
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("supervisor response unparseable")
+                .hasMessageContaining("supervisor did not return a JSON object")
+                .hasMessageContaining("I'll start by examining");
+
         assertThat(job.workDir().resolve("supervisor-response.txt"))
                 .isRegularFile();
     }
