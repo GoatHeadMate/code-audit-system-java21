@@ -8,9 +8,7 @@ import io.agentscope.core.model.AnthropicChatModel;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
-import io.agentscope.core.permission.PermissionBehavior;
-import io.agentscope.core.permission.PermissionContextState;
-import io.agentscope.core.permission.PermissionRule;
+import io.agentscope.core.skill.repository.FileSystemSkillRepository;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import io.agentscope.harness.agent.subagent.WorkspaceMode;
@@ -25,6 +23,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class AgentScopeGateway implements ClaudeGateway {
     private static final String USER_ID = "code-audit";
+    static final String AUDIT_SKILL_SOURCE = "audit";
 
     private final AgentScopeProperties properties;
 
@@ -68,20 +67,30 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
                 .sysPrompt(supervisorPrompt(sourceRoot, declarations))
+                .skillRepository(new FileSystemSkillRepository(
+                        skillsDirectory(workingDirectory),
+                        false,
+                        AUDIT_SKILL_SOURCE))
                 .disableMemoryTools()
-                .permissionContext(supervisorPermissions())
                 .build()) {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
                     .doOnNext(events::handle)
-                    .blockLast(properties.timeout());
+                    .blockLast(supervisorTotalTimeout(declarations));
+        } finally {
+            events.flushAll();
         }
-        events.flushAll();
         String result = events.finalResult();
 
         if (result.isBlank()) {
+            String detail = events.startedAgentSpawns() > 0
+                    ? "started " + events.startedAgentSpawns()
+                            + " agent_spawn(s), completed "
+                            + events.completedAgentSpawns()
+                    : "no agent_spawn calls observed";
             throw new IllegalStateException(
-                    "AgentScope supervisor returned no final JSON result"
+                    "AgentScope supervisor returned no final JSON result ("
+                            + detail + ")"
             );
         }
         return result;
@@ -102,7 +111,6 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .maxIters(properties.maxIters())
                 .subagents(subagents)
                 .disableShellTool()
-                .disableDynamicSkills()
                 .disableDefaultWorkspaceSkills()
                 .disableSessionPersistence();
     }
@@ -164,8 +172,7 @@ public class AgentScopeGateway implements ClaudeGateway {
                             .inlineAgentsBody(entry.getValue().prompt())
                             .workspaceMode(WorkspaceMode.SHARED)
                             .steps(Math.min(properties.maxIters(), 30))
-                            .mode(SubagentDeclaration.Mode.SUBAGENT)
-                            .inheritParentPermissions(false);
+                            .mode(SubagentDeclaration.Mode.SUBAGENT);
                     List<String> tools = entry.getValue().tools();
                     if (tools != null && !tools.isEmpty()) {
                         builder.tools(tools);
@@ -186,18 +193,17 @@ public class AgentScopeGateway implements ClaudeGateway {
         return requested == null ? properties.timeout() : requested;
     }
 
-    private static final List<String> SUPERVISOR_DENIED_TOOLS = List.of(
-            "read_file", "write_file", "edit_file",
-            "list_files", "glob_files", "grep_files"
-    );
+    private Path skillsDirectory(Path workingDirectory) {
+        return workingDirectory.toAbsolutePath()
+                .normalize()
+                .resolve(".claude")
+                .resolve("skills");
+    }
 
-    private PermissionContextState supervisorPermissions() {
-        PermissionContextState.Builder builder = PermissionContextState.builder();
-        for (String tool : SUPERVISOR_DENIED_TOOLS) {
-            builder.addDenyRule(tool, new PermissionRule(
-                    tool, null, PermissionBehavior.DENY, "supervisor-policy"));
-        }
-        return builder.build();
+    private Duration supervisorTotalTimeout(List<SubagentDeclaration> declarations) {
+        int subagentCount = declarations == null ? 0 : declarations.size();
+        int multiplier = Math.max(1, Math.min(subagentCount, 8));
+        return properties.timeout().multipliedBy(multiplier);
     }
 
     private String supervisorPrompt(
@@ -210,16 +216,18 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .orElse("(none)");
         return """
                 You are the Java AgentScope supervisor for a white-box security audit.
-                Work autonomously. Your first action must be one or more agent_spawn
-                tool calls that delegate selected evidence packages to registered
-                hunter subagents when their category is relevant.
-                File and memory tools are denied by policy. Delegate all source
-                review to hunter subagents via agent_spawn.
+                Work autonomously. Your first action must be agent_spawn tool calls
+                that delegate evidence packages to registered hunter subagents.
+                Issue ALL agent_spawn calls together in your first turn so
+                hunters run in parallel.
+                Do NOT use file-reading, file-writing, or skill-loading tools
+                yourself. Memory tools are disabled. Delegate all source review
+                to hunter subagents via agent_spawn.
                 Do not use background, async, fire-and-forget, or timeout_seconds=0
                 subagent calls. Every agent_spawn call must wait for a returned result with a
                 non-zero timeout before you continue.
-                Never finish immediately after scheduling hunters. Read every selected
-                subagent result, then synthesize the final answer.
+                Never finish immediately after scheduling hunters. Read every
+                selected subagent result, then synthesize the final answer.
                 Source root: %s
                 Available hunter subagents: %s
                 The final assistant message must be exactly one JSON object with fields:

@@ -17,6 +17,7 @@ final class AgentScopeEventCollector {
     private static final String SUPERVISOR_SOURCE = "audit-supervisor";
 
     private final AtomicReference<String> result = new AtomicReference<>("");
+    private final AtomicInteger started = new AtomicInteger();
     private final AtomicInteger completed = new AtomicInteger();
     private final Map<String, AgentScopeTextBuffer> buffers = new LinkedHashMap<>();
     private final Consumer<String> eventConsumer;
@@ -39,6 +40,7 @@ final class AgentScopeEventCollector {
                 if (event instanceof ToolCallStartEvent tool
                         && isSupervisor(source)
                         && "agent_spawn".equals(tool.getToolCallName())) {
+                    started.incrementAndGet();
                     eventConsumer.accept("[subagent-start] START agent_spawn");
                 }
             }
@@ -88,6 +90,14 @@ final class AgentScopeEventCollector {
         }
         String transcript = buffer(SUPERVISOR_SOURCE).transcript();
         return looksLikeSupervisorEnvelope(transcript) ? transcript : "";
+    }
+
+    int startedAgentSpawns() {
+        return started.get();
+    }
+
+    int completedAgentSpawns() {
+        return completed.get();
     }
 
     private boolean looksLikeSupervisorEnvelope(String text) {

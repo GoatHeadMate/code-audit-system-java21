@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.agentscope.core.event.ExceedMaxItersEvent;
 import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.event.ToolCallStartEvent;
+import io.agentscope.core.event.ToolResultEndEvent;
+import io.agentscope.core.message.ToolResultState;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -52,6 +55,29 @@ class AgentScopeEventCollectorTest {
         ).withSource("audit-supervisor"));
         collector.flushAll();
 
+        assertThat(collector.finalResult()).isBlank();
+    }
+
+    @Test
+    void tracksStartedAndCompletedSupervisorAgentSpawns() {
+        AgentScopeEventCollector collector = new AgentScopeEventCollector(
+                ignored -> {
+                }
+        );
+
+        collector.handle(new ToolCallStartEvent("r1", "call-1", "agent_spawn")
+                .withSource("audit-supervisor"));
+        collector.handle(new ToolCallStartEvent("r1", "call-2", "agent_spawn")
+                .withSource("audit-supervisor"));
+        collector.handle(new ToolResultEndEvent(
+                "r1",
+                "call-1",
+                "agent_spawn",
+                ToolResultState.SUCCESS
+        ).withSource("audit-supervisor"));
+
+        assertThat(collector.startedAgentSpawns()).isEqualTo(2);
+        assertThat(collector.completedAgentSpawns()).isEqualTo(1);
         assertThat(collector.finalResult()).isBlank();
     }
 

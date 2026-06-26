@@ -8,9 +8,9 @@ import com.huawei.audit.hunter.FindingParser;
 import com.huawei.audit.job.JobLogBroker;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -33,6 +33,13 @@ public class SupervisorAgent {
             "file_operations",
             "ssrf",
             "component_vulns"
+    );
+    private static final List<String> REVIEW_ARRAY_FIELDS = List.of(
+            "authorization_surface",
+            "unresolved_entrypoints",
+            "dependency_candidates",
+            "component_candidates",
+            "vulnerable_dependencies"
     );
 
     private final ClaudeAgentSupervisorModel model;
@@ -67,12 +74,31 @@ public class SupervisorAgent {
         Map<String, ClaudeGateway.AgentDef> agents = buildAgentDefs(
                 job.workDir(), sourceRoot, candidates, evidenceManifest, skillManifest
         );
+        List<String> activeCandidates = new ArrayList<>(agents.keySet());
         logs.publish(
                 job,
                 "[supervisor-agent] starting one AgentScope Java supervisor"
                         + " with " + agents.size() + " pre-defined agents: "
                         + String.join(", ", agents.keySet())
         );
+        if (agents.isEmpty()) {
+            String emptyResponse = """
+                    {"selected_hunters":[],"rationale":"no evidence packages contain candidate review work","findings":[]}
+                    """;
+            Files.writeString(
+                    job.workDir().resolve("supervisor-response.txt"),
+                    emptyResponse
+            );
+            logs.publish(
+                    job,
+                    "[supervisor-agent] no evidence packages contain candidate review work; skipping AgentScope"
+            );
+            return new SupervisorResult(
+                    List.of(),
+                    "no evidence packages contain candidate review work",
+                    List.of()
+            );
+        }
         String response = model.supervise(
                 job.workDir(),
                 sourceRoot,
@@ -81,7 +107,7 @@ public class SupervisorAgent {
                         UserMessage.from(userPrompt(
                                 sourceRoot,
                                 techProfile,
-                                candidates,
+                                activeCandidates,
                                 analysisSummary
                         ))
                 ),
@@ -93,7 +119,7 @@ public class SupervisorAgent {
                 response
         );
         try {
-            SupervisorEnvelope envelope = parseEnvelope(response, candidates);
+            SupervisorEnvelope envelope = parseEnvelope(response, activeCandidates);
             logs.publish(
                     job,
                     "[supervisor-agent] completed; delegated="
@@ -127,30 +153,37 @@ public class SupervisorAgent {
             List<String> candidates,
             Map<String, String> evidenceManifest,
             Map<String, String> skillManifest
-    ) throws IOException {
+    ) {
         Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
-        List<String> readOnlyTools = List.of("read_file", "glob_files", "grep_files");
+        List<String> readOnlyTools = List.of(
+                "read_file",
+                "glob_files",
+                "grep_files",
+                "load_skill_through_path"
+        );
         for (String hunter : candidates) {
             String taskPath = evidenceManifest.get(hunter);
             if (taskPath == null) {
+                continue;
+            }
+            if (!hasReviewWork(Path.of(taskPath))) {
                 continue;
             }
             String baseHunter = baseHunterName(hunter);
             String skillName = skillManifest.get(baseHunter);
             List<String> skills = skillName == null
                     ? List.of()
-                    : List.of(skillName);
+                    : List.of(skillId(skillName));
             String skillRef = skillName == null ? "(none)" : skillName;
-            String skillContent = skillName == null
-                    ? "(none)"
-                    : readSkillContent(workDirectory, skillName);
+            String skillId = skillName == null ? "(none)" : skillId(skillName);
             String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
                     hunter,
                     skillRef,
+                    skillId,
                     taskPath,
                     sourceRootStr,
-                    skillRef + "\n\n" + skillContent
+                    skillId
             );
             agents.put(hunter, new ClaudeGateway.AgentDef(
                     "Audit " + hunter.replace('_', ' ')
@@ -164,18 +197,35 @@ public class SupervisorAgent {
         return agents;
     }
 
-    private String readSkillContent(Path workDirectory, String skillName)
-            throws IOException {
-        Path skill = workDirectory.resolve(".claude")
-                .resolve("skills")
-                .resolve(skillName)
-                .resolve("SKILL.md");
-        return Files.isRegularFile(skill) ? Files.readString(skill) : "(missing)";
+    private boolean hasReviewWork(Path taskPath) {
+        if (!Files.isRegularFile(taskPath)) {
+            return true;
+        }
+        try {
+            JsonNode task = objectMapper.readTree(taskPath.toFile());
+            if (task.path("candidate_count").asInt(0) > 0
+                    || task.path("stored_candidate_count").asInt(0) > 0) {
+                return true;
+            }
+            for (String field : REVIEW_ARRAY_FIELDS) {
+                JsonNode value = task.path(field);
+                if (value.isArray() && value.size() > 0) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException e) {
+            return true;
+        }
     }
 
     private static String baseHunterName(String hunter) {
         int batchIdx = hunter.indexOf("_batch_");
         return batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+    }
+
+    private static String skillId(String skillName) {
+        return skillName + "_" + AgentScopeGateway.AUDIT_SKILL_SOURCE;
     }
 
     private String systemPrompt() {
@@ -196,8 +246,9 @@ public class SupervisorAgent {
                 ════════════════════════════════════════════════════════════════
                 All hunter subagents are pre-registered by name. Invoke them with
                 the provided `agent_spawn` tool and the exact hunter name.
-                File and memory tools are denied by policy. Delegate all source
-                review to hunter subagents via agent_spawn.
+                Do NOT use file-reading, file-writing, or skill-loading tools
+                yourself. Memory tools are disabled. Delegate all source review
+                to hunter subagents via agent_spawn.
                 Each agent already has its judgment-rules skill, task file and
                 source root embedded in its definition. You only need to tell it
                 to start and then read the returned result.
@@ -210,19 +261,24 @@ public class SupervisorAgent {
                 aggregate confirmed findings. Do not repeat broad source discovery yourself.
 
                 Rules:
-                1. Your first action after reading the user prompt must be one or
-                   more `agent_spawn` calls for selected hunter agents.
+                1. Your first action after reading the user prompt must be
+                   `agent_spawn` calls for ALL selected hunter agents. Issue all
+                   agent_spawn calls together in one assistant turn.
                 2. Delegate each selected category to its matching pre-defined agent.
-                3. Launch independent agents in parallel waves, never exceeding the
-                   maximum parallel agents stated in the user prompt.
-                4. Code execution, authorization, unsafe parsing, file operations, SSRF
-                   and component vulnerabilities are mandatory when available.
+                3. Spawn all selected hunters in parallel in your first turn.
+                   Wait for all returned results before synthesizing the final answer.
+                4. Only registered hunter agents are available. Categories without
+                   candidate paths or category-specific review surfaces are not
+                   registered and must not be invented.
+                   Code execution, authorization, unsafe parsing, file operations, SSRF
+                   and component vulnerabilities are mandatory when registered.
                    When a category is split into batch agents (e.g., code_execution_batch_1,
                    code_execution_batch_2), ALL batches are mandatory — each contains a
                    unique non-overlapping subset of candidates.
                 5. Delegate no more than the configured maximum and never invent names.
                 6. If a subagent errors or times out, include that status in the
-                   rationale and continue with the other returned results.
+                   rationale and proceed with available results. NEVER re-spawn,
+                   retry, or resume a timed-out or errored agent.
                 7. Review returned findings, remove duplicates and obvious false positives.
                    Reject findings that name a sink but do not validate the candidate
                    entrypoint, dispatch path and attacker-controlled value flow.
@@ -235,8 +291,8 @@ public class SupervisorAgent {
                    Omitting any of these fields makes the finding unparseable.
                    Do not return SUPPRESS items as findings; use them only to explain
                    why a candidate is not reported.
-                9. Before finalizing, verify each subagent confirmed it reviewed all
-                   candidate chunks. If a subagent skipped chunks, resume it.
+                9. Before finalizing, verify results from agents that completed
+                   successfully. Do not re-spawn timed-out or errored agents.
                 10. Return format:
                    {"selected_hunters":["..."],"rationale":"...","findings":[...]}
                 11. After gathering all subagent findings, perform a CROSS-API CHAIN
@@ -268,17 +324,12 @@ public class SupervisorAgent {
                         properties.maxPrimaryHunters()
                                 + properties.maxAdditionalHunters()
                 );
-        int maxParallelHunters = Math.min(
-                candidates.size(),
-                properties.maxPrimaryHunters()
-                        + properties.maxAdditionalHunters()
-        );
+        int maxParallelHunters = candidates.size();
         String batchNote = hasBatches
                 ? """
 
-                BATCH AGENTS: Some categories have been split into parallel batches.
+                BATCH AGENTS: Some categories have been split into batches.
                 You MUST delegate ALL batch agents for each category.
-                Use as many waves as needed and never exceed the parallel-wave limit.
                 """
                 : "";
         return """
@@ -291,7 +342,7 @@ public class SupervisorAgent {
                 %s
 
                 Total Hunters to delegate: %d
-                Maximum parallel agents per wave: %d
+                Maximum agent_spawn calls per assistant turn: %d
                 Intelligent selection enabled: %s
                 %s
                 White-box analysis summary (for cross-API chain reasoning):
@@ -299,9 +350,11 @@ public class SupervisorAgent {
 
                 DELEGATION INSTRUCTIONS:
                 Invoke each pre-defined agent by name with the AgentScope
-                `agent_spawn` tool. Your first action must be one or more
-                `agent_spawn` calls. File and memory tools are denied by policy.
-                Delegate all source inspection to hunter subagents.
+                `agent_spawn` tool. Issue ALL agent_spawn calls together in your
+                first turn so hunters run in parallel.
+                Do NOT use file-reading, file-writing, or skill-loading tools
+                yourself. Memory tools are disabled. Delegate all source
+                inspection to hunters.
                 All agent definitions already contain their judgment-rules skill,
                 task file, and source root. You do not need to pass file paths in the prompt.
 
@@ -323,9 +376,11 @@ public class SupervisorAgent {
     private static final String SUBAGENT_PROMPT_TEMPLATE = """
             You are a white-box code audit subagent for the `%s` category.
 
-            Your category judgment rules are provided as a Skill named `%s`
+            Your category judgment rules are provided as an AgentScope skill named `%s`
             (severity thresholds, confidence, sanitizer and downgrade conditions).
-            Invoke that skill with the Skill tool FIRST, before reviewing candidates.
+            Your FIRST action must be:
+            load_skill_through_path(skillId="%s", path="SKILL.md")
+            Then follow the returned skill instructions before reviewing candidates.
 
             Your task file (candidate paths to review):
             %s
@@ -334,7 +389,7 @@ public class SupervisorAgent {
             %s
 
             Execution steps:
-            1. Invoke your `%s` skill to load category-specific judgment rules.
+            1. Load your `%s` skill with load_skill_through_path before making judgments.
             2. Read the task file to get all candidate-path chunks.
             3. Review EVERY candidate-path chunk and stored-candidate chunk. For
                authorization, also review every endpoint in `authorization_surface`.

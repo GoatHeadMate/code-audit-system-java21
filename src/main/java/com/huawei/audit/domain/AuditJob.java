@@ -28,6 +28,7 @@ public final class AuditJob {
     private volatile Map<String, Object> techProfile = Map.of();
     private volatile Map<String, Object> taskSummary = Map.of();
     private volatile Set<String> selectedInterfaceIds = Set.of();
+    private volatile String cacheKey = "";
     private volatile boolean submitted;
     private volatile boolean logDone;
 
@@ -77,6 +78,7 @@ public final class AuditJob {
     public Map<String, Object> techProfile() { return techProfile; }
     public Map<String, Object> taskSummary() { return taskSummary; }
     public Set<String> selectedInterfaceIds() { return selectedInterfaceIds; }
+    public String cacheKey() { return cacheKey; }
     public boolean submitted() { return submitted; }
     public List<String> logHistory() {
         synchronized (logHistory) {
@@ -109,6 +111,7 @@ public final class AuditJob {
         submitted = true;
         return true;
     }
+    public void cacheKey(String cacheKey) { this.cacheKey = cacheKey == null ? "" : cacheKey; }
     public void logDone(boolean logDone) { this.logDone = logDone; }
 
     public Map<String, Object> toMeta() {

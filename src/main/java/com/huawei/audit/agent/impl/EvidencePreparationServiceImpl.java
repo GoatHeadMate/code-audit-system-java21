@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Service;
@@ -51,6 +52,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final OrchestratorProperties orchestratorProperties;
     private final Semaphore analysisSlot = new Semaphore(1, true);
     private final long analysisTimeoutMs;
+    private final Path cacheDirectory;
 
     public EvidencePreparationServiceImpl(
             WhiteBoxAnalysisService analysisService,
@@ -69,6 +71,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
         this.orchestratorProperties = orchestratorProperties;
         this.claudeGateway = claudeGateway;
+        this.cacheDirectory = properties.absoluteWorkspace().resolve(".analysis-cache");
+        try { Files.createDirectories(cacheDirectory); } catch (IOException ignored) { }
     }
 
     @Override
@@ -82,7 +86,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         Files.createDirectories(analysisDirectory);
         Files.createDirectories(packageDirectory);
 
-        var analysis = runWhiteBoxAnalysis(job, sourceRoot, dependencies);
+        var analysis = cachedAnalysis(job, sourceRoot, dependencies);
         writeJson(analysisDirectory.resolve("entrypoints.json"), analysis.entryPoints());
         writeJson(analysisDirectory.resolve("sinks.json"), analysis.sinks());
         writeJson(analysisDirectory.resolve("storage-accesses.json"), analysis.storageAccesses());
@@ -237,6 +241,46 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                 .filter(entry -> "UNRESOLVED".equals(entry.bindingStatus())).toList());
         task.put("review_contract", REVIEW_CONTRACT);
         writeJson(taskFile, task);
+    }
+
+    private WhiteBoxAnalysisService.AnalysisResult cachedAnalysis(
+            AuditJob job, Path sourceRoot, List<Map<String, String>> dependencies
+    ) throws Exception {
+        String cacheKey = analysisCacheKey(job);
+        if (!cacheKey.isEmpty()) {
+            Path cacheFile = cacheDirectory.resolve(cacheKey + ".json");
+            if (Files.isRegularFile(cacheFile)) {
+                try {
+                    WhiteBoxAnalysisService.AnalysisResult cached = objectMapper.readValue(
+                            cacheFile.toFile(),
+                            WhiteBoxAnalysisService.AnalysisResult.class
+                    );
+                    logs.publish(job, "[whitebox] reusing cached analysis (key=" + cacheKey + ")");
+                    return cached;
+                } catch (Exception e) {
+                    logs.publish(job, "[whitebox] cache file corrupt, re-analyzing");
+                    Files.deleteIfExists(cacheFile);
+                }
+            }
+        }
+        WhiteBoxAnalysisService.AnalysisResult result = runWhiteBoxAnalysis(job, sourceRoot, dependencies);
+        if (!cacheKey.isEmpty()) {
+            try {
+                Path cacheFile = cacheDirectory.resolve(cacheKey + ".json");
+                objectMapper.writeValue(cacheFile.toFile(), result);
+            } catch (Exception ignored) { }
+        }
+        return result;
+    }
+
+    private String analysisCacheKey(AuditJob job) {
+        String sourceKey = job.cacheKey();
+        if (sourceKey == null || sourceKey.isEmpty()) {
+            return "";
+        }
+        var ids = new TreeSet<>(job.selectedInterfaceIds());
+        String suffix = ids.isEmpty() ? "all" : String.join("_", ids);
+        return sourceKey + "_" + suffix;
     }
 
     private WhiteBoxAnalysisService.AnalysisResult runWhiteBoxAnalysis(

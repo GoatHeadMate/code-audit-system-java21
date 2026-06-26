@@ -43,7 +43,7 @@ public class SourceWorkspaceServiceImpl implements SourceWorkspaceService {
     public PreparedSource prepare(AuditJob job) throws Exception {
         if (job.projectPath() != null
                 && Files.isDirectory(job.projectPath())) {
-            return new PreparedSource(job.projectPath(), "prepared");
+            return new PreparedSource(job.projectPath(), job.cacheKey());
         }
         Path workDir = properties.absoluteWorkspace().resolve("audit_" + job.jobId());
         Path projectDir = workDir.resolve("project");
@@ -65,11 +65,10 @@ public class SourceWorkspaceServiceImpl implements SourceWorkspaceService {
 
         Path sourceRoot = singleChildDirectory(projectDir);
         job.projectPath(sourceRoot);
+        String truncatedKey = cacheKey.substring(0, Math.min(16, cacheKey.length()));
+        job.cacheKey(truncatedKey);
         logs.publish(job, "source ready: " + sourceRoot);
-        return new PreparedSource(
-                sourceRoot,
-                cacheKey.substring(0, Math.min(16, cacheKey.length()))
-        );
+        return new PreparedSource(sourceRoot, truncatedKey);
     }
 
     @Override
