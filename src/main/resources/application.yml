@@ -17,10 +17,10 @@ server:
 audit:
   workspace: ${AUDIT_WORKSPACE:workspace}
   agentscope:
-    provider: ${AGENTSCOPE_PROVIDER:anthropic}
-    model: ${AGENTSCOPE_MODEL:claude-sonnet-4-5-20250929}
-    api-key: ${AGENTSCOPE_API_KEY:${ANTHROPIC_API_KEY:}}
-    base-url: ${AGENTSCOPE_BASE_URL:}
+    provider: anthropic
+    model: glm-5.2
+    api-key: sk-sss
+    base-url: https://open.bigmodel.cn/api/anthropic
     max-iters: ${AGENTSCOPE_MAX_ITERS:80}
     timeout: ${AGENTSCOPE_TIMEOUT:30m}
   max-concurrent-jobs: ${MAX_CONCURRENT_JOBS:2}
