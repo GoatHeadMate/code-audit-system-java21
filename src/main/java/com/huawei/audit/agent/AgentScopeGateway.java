@@ -8,6 +8,9 @@ import io.agentscope.core.model.AnthropicChatModel;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
+import io.agentscope.core.permission.PermissionBehavior;
+import io.agentscope.core.permission.PermissionContextState;
+import io.agentscope.core.permission.PermissionRule;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import io.agentscope.harness.agent.subagent.WorkspaceMode;
@@ -65,6 +68,8 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
                 .sysPrompt(supervisorPrompt(sourceRoot, declarations))
+                .disableMemoryTools()
+                .permissionContext(supervisorPermissions())
                 .build()) {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
@@ -152,14 +157,21 @@ public class AgentScopeGateway implements ClaudeGateway {
             return List.of();
         }
         return agents.entrySet().stream()
-                .map(entry -> SubagentDeclaration.builder()
-                        .name(entry.getKey())
-                        .description(entry.getValue().description())
-                        .inlineAgentsBody(entry.getValue().prompt())
-                        .workspaceMode(WorkspaceMode.SHARED)
-                        .steps(Math.min(properties.maxIters(), 30))
-                        .mode(SubagentDeclaration.Mode.SUBAGENT)
-                        .build())
+                .map(entry -> {
+                    SubagentDeclaration.Builder builder = SubagentDeclaration.builder()
+                            .name(entry.getKey())
+                            .description(entry.getValue().description())
+                            .inlineAgentsBody(entry.getValue().prompt())
+                            .workspaceMode(WorkspaceMode.SHARED)
+                            .steps(Math.min(properties.maxIters(), 30))
+                            .mode(SubagentDeclaration.Mode.SUBAGENT)
+                            .inheritParentPermissions(false);
+                    List<String> tools = entry.getValue().tools();
+                    if (tools != null && !tools.isEmpty()) {
+                        builder.tools(tools);
+                    }
+                    return builder.build();
+                })
                 .toList();
     }
 
@@ -172,6 +184,20 @@ public class AgentScopeGateway implements ClaudeGateway {
 
     private Duration effectiveTimeout(Duration requested) {
         return requested == null ? properties.timeout() : requested;
+    }
+
+    private static final List<String> SUPERVISOR_DENIED_TOOLS = List.of(
+            "read_file", "write_file", "edit_file",
+            "list_files", "glob_files", "grep_files"
+    );
+
+    private PermissionContextState supervisorPermissions() {
+        PermissionContextState.Builder builder = PermissionContextState.builder();
+        for (String tool : SUPERVISOR_DENIED_TOOLS) {
+            builder.addDenyRule(tool, new PermissionRule(
+                    tool, null, PermissionBehavior.DENY, "supervisor-policy"));
+        }
+        return builder.build();
     }
 
     private String supervisorPrompt(
@@ -187,9 +213,8 @@ public class AgentScopeGateway implements ClaudeGateway {
                 Work autonomously. Your first action must be one or more agent_spawn
                 tool calls that delegate selected evidence packages to registered
                 hunter subagents when their category is relevant.
-                Do not use list_files, read_file, glob_files, grep_files, memory_search,
-                or other direct source-discovery tools as the supervisor. The registered
-                hunter subagents perform source review.
+                File and memory tools are denied by policy. Delegate all source
+                review to hunter subagents via agent_spawn.
                 Do not use background, async, fire-and-forget, or timeout_seconds=0
                 subagent calls. Every agent_spawn call must wait for a returned result with a
                 non-zero timeout before you continue.

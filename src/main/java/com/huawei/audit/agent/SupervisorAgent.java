@@ -130,7 +130,7 @@ public class SupervisorAgent {
     ) throws IOException {
         Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
-        List<String> readOnlyTools = List.of("Read", "Glob", "Grep");
+        List<String> readOnlyTools = List.of("read_file", "glob_files", "grep_files");
         for (String hunter : candidates) {
             String taskPath = evidenceManifest.get(hunter);
             if (taskPath == null) {
@@ -196,9 +196,8 @@ public class SupervisorAgent {
                 ════════════════════════════════════════════════════════════════
                 All hunter subagents are pre-registered by name. Invoke them with
                 the provided `agent_spawn` tool and the exact hunter name.
-                Do not use Agent(...), SendMessage, memory_search, list_files,
-                read_file, glob_files, grep_files, or other direct source-discovery
-                tools from the supervisor for hunter work.
+                File and memory tools are denied by policy. Delegate all source
+                review to hunter subagents via agent_spawn.
                 Each agent already has its judgment-rules skill, task file and
                 source root embedded in its definition. You only need to tell it
                 to start and then read the returned result.
@@ -301,9 +300,8 @@ public class SupervisorAgent {
                 DELEGATION INSTRUCTIONS:
                 Invoke each pre-defined agent by name with the AgentScope
                 `agent_spawn` tool. Your first action must be one or more
-                `agent_spawn` calls. Do not inspect source directly from the
-                supervisor with list_files, read_file, glob_files, grep_files,
-                or memory_search.
+                `agent_spawn` calls. File and memory tools are denied by policy.
+                Delegate all source inspection to hunter subagents.
                 All agent definitions already contain their judgment-rules skill,
                 task file, and source root. You do not need to pass file paths in the prompt.
 
@@ -341,7 +339,7 @@ public class SupervisorAgent {
             3. Review EVERY candidate-path chunk and stored-candidate chunk. For
                authorization, also review every endpoint in `authorization_surface`.
             4. For each candidate, validate the entrypoint-to-sink path against source code.
-            5. Use Read/Glob/Grep to resolve ambiguous dispatch and missing source slices.
+            5. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
             6. Never execute shell commands, create files, or delegate to another agent.
             7. Return a single JSON object: {"chunks_reviewed": N, "findings": [...]}.
                Each finding must contain: rule_id, verdict, title, severity, confidence,
