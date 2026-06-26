@@ -10,7 +10,9 @@ class AgentScopeTextBufferTest {
 
     @Test
     void combinesTokenDeltasBeforePublishingSupervisorLog() {
-        AgentScopeTextBuffer buffer = new AgentScopeTextBuffer();
+        AgentScopeTextBuffer buffer = new AgentScopeTextBuffer(
+                "[agentscope-supervisor]"
+        );
         List<String> logs = new ArrayList<>();
 
         buffer.append("I", logs::add);
@@ -27,7 +29,9 @@ class AgentScopeTextBufferTest {
 
     @Test
     void flushesPartialTextAtToolBoundaries() {
-        AgentScopeTextBuffer buffer = new AgentScopeTextBuffer();
+        AgentScopeTextBuffer buffer = new AgentScopeTextBuffer(
+                "[agentscope-supervisor]"
+        );
         List<String> logs = new ArrayList<>();
 
         buffer.append("Starting hunter", logs::add);
@@ -40,7 +44,9 @@ class AgentScopeTextBufferTest {
 
     @Test
     void doesNotSplitOnJsonFieldPunctuation() {
-        AgentScopeTextBuffer buffer = new AgentScopeTextBuffer();
+        AgentScopeTextBuffer buffer = new AgentScopeTextBuffer(
+                "[agentscope-supervisor]"
+        );
         List<String> logs = new ArrayList<>();
 
         buffer.append("\"candidate_count\":", logs::add);

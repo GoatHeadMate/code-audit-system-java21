@@ -6,8 +6,13 @@ final class AgentScopeTextBuffer {
     private static final int MAX_LOG_CHARS = 240;
     private static final int PREVIEW_CHARS = 300;
 
+    private final String logPrefix;
     private final StringBuilder pending = new StringBuilder();
     private final StringBuilder transcript = new StringBuilder();
+
+    AgentScopeTextBuffer(String logPrefix) {
+        this.logPrefix = logPrefix;
+    }
 
     void append(String delta, Consumer<String> eventConsumer) {
         transcript.append(delta);
@@ -21,7 +26,7 @@ final class AgentScopeTextBuffer {
         String text = pending.toString().strip();
         pending.setLength(0);
         if (!text.isBlank()) {
-            eventConsumer.accept("[agentscope-supervisor] " + preview(text));
+            eventConsumer.accept(logPrefix + " " + preview(text));
         }
     }
 

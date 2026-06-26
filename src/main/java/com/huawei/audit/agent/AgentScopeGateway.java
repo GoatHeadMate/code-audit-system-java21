@@ -2,14 +2,7 @@ package com.huawei.audit.agent;
 
 import com.huawei.audit.config.AgentScopeProperties;
 import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.event.AgentEvent;
-import io.agentscope.core.event.AgentResultEvent;
-import io.agentscope.core.event.ExceedMaxItersEvent;
-import io.agentscope.core.event.TextBlockDeltaEvent;
-import io.agentscope.core.event.ToolCallStartEvent;
-import io.agentscope.core.event.ToolResultEndEvent;
 import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.ToolResultState;
 import io.agentscope.core.message.UserMessage;
 import io.agentscope.core.model.AnthropicChatModel;
 import io.agentscope.core.model.DashScopeChatModel;
@@ -23,8 +16,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
 
@@ -66,9 +57,9 @@ public class AgentScopeGateway implements ClaudeGateway {
             Consumer<String> eventConsumer
     ) {
         List<SubagentDeclaration> declarations = buildSubagents(agents);
-        AtomicReference<String> result = new AtomicReference<>("");
-        AtomicInteger completed = new AtomicInteger();
-        AgentScopeTextBuffer textBuffer = new AgentScopeTextBuffer();
+        AgentScopeEventCollector events = new AgentScopeEventCollector(
+                eventConsumer
+        );
 
         try (HarnessAgent agent = baseBuilder(workingDirectory, declarations)
                 .name("audit-supervisor")
@@ -77,24 +68,16 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .build()) {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
-                    .doOnNext(event -> handleEvent(
-                            event,
-                            result,
-                            completed,
-                            textBuffer,
-                            eventConsumer
-                    ))
+                    .doOnNext(events::handle)
                     .blockLast(properties.timeout());
         }
-        textBuffer.flush(eventConsumer);
-        if (result.get().isBlank() && !textBuffer.transcript().isBlank()) {
-            result.set(textBuffer.transcript());
-        }
+        events.flushAll();
+        String result = events.finalResult();
 
-        if (result.get().isBlank()) {
+        if (result.isBlank()) {
             throw new IllegalStateException("AgentScope supervisor returned no final result");
         }
-        return result.get();
+        return result;
     }
 
     @Override
@@ -217,60 +200,4 @@ public class AgentScopeGateway implements ClaudeGateway {
         );
     }
 
-    private void handleEvent(
-            AgentEvent event,
-            AtomicReference<String> result,
-            AtomicInteger completed,
-            AgentScopeTextBuffer textBuffer,
-            Consumer<String> eventConsumer
-    ) {
-        switch (event.getType()) {
-            case TEXT_BLOCK_DELTA -> {
-                if (event instanceof TextBlockDeltaEvent text
-                        && !text.getDelta().isBlank()) {
-                    textBuffer.append(text.getDelta(), eventConsumer);
-                }
-            }
-            case TOOL_CALL_START -> {
-                textBuffer.flush(eventConsumer);
-                if (event instanceof ToolCallStartEvent tool
-                        && "agent_spawn".equals(tool.getToolCallName())) {
-                    eventConsumer.accept("[subagent-start] START agent_spawn");
-                }
-            }
-            case TOOL_RESULT_END -> {
-                textBuffer.flush(eventConsumer);
-                if (event instanceof ToolResultEndEvent tool
-                        && "agent_spawn".equals(tool.getToolCallName())) {
-                    int count = completed.incrementAndGet();
-                    eventConsumer.accept("[subagent-return] "
-                            + status(tool.getState())
-                            + " agent_spawn | completed " + count);
-                }
-            }
-            case AGENT_RESULT -> {
-                textBuffer.flush(eventConsumer);
-                if (event instanceof AgentResultEvent agentResult) {
-                    result.set(agentResult.getResult().getTextContent());
-                }
-            }
-            case EXCEED_MAX_ITERS -> {
-                textBuffer.flush(eventConsumer);
-                if (event instanceof ExceedMaxItersEvent maxIters) {
-                    throw new IllegalStateException(
-                            "AgentScope exceeded max iterations: "
-                                    + maxIters.getCurrentIter()
-                                    + "/"
-                                    + maxIters.getMaxIters()
-                    );
-                }
-            }
-            default -> {
-            }
-        }
-    }
-
-    private String status(ToolResultState state) {
-        return state == ToolResultState.SUCCESS ? "DONE" : state.name();
-    }
 }

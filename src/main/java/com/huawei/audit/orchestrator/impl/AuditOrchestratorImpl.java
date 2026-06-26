@@ -109,8 +109,9 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
             );
             persistMeta(job);
         } catch (Exception exception) {
-            job.fail(exception.getMessage());
-            logs.publish(job, "[FATAL] " + exception.getMessage());
+            String error = rootCauseMessage(exception);
+            job.fail(error);
+            logs.publish(job, "[FATAL] " + error);
             persistMeta(job);
         } finally {
             if (acquired) {
@@ -131,5 +132,24 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    private String rootCauseMessage(Exception exception) {
+        Throwable cursor = exception;
+        while (cursor.getCause() != null) {
+            cursor = cursor.getCause();
+        }
+        String message = cursor.getMessage();
+        if (message == null || message.isBlank()) {
+            message = cursor.getClass().getName();
+        }
+        String topMessage = exception.getMessage();
+        if (topMessage == null || topMessage.isBlank()) {
+            topMessage = exception.getClass().getName();
+        }
+        return cursor == exception
+                ? message
+                : topMessage + " | root cause: "
+                        + cursor.getClass().getSimpleName() + ": " + message;
     }
 }
