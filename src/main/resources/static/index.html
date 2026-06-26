@@ -115,6 +115,23 @@
   .sev-high     { background: #fff7ed; color: #ea580c; border-color: #fed7aa; }
   .sev-medium   { background: #fefce8; color: #ca8a04; border-color: #fef08a; }
   .sev-low      { background: #eff6ff; color: #2563eb; border-color: #bfdbfe; }
+
+  @media (max-width: 768px) {
+    body { min-height: 100dvh; overflow: auto; }
+    .app-shell { flex-direction: column; overflow: visible; }
+    .sidebar {
+      width: 100%;
+      max-height: 20rem;
+      border-right: 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .main-panel { min-height: 42rem; overflow: visible; }
+    #detailView { min-height: 42rem; }
+    #panelFindings, #panelSummary { padding: 1rem; }
+    .finding-card { padding: 1rem; }
+    .finding-header { flex-direction: column; align-items: stretch; }
+    .finding-meta { max-width: none; text-align: left; }
+  }
 </style>
 </head>
 
@@ -140,10 +157,10 @@
 </header>
 
 <!-- ═══════ BODY ═══════════════════════════════════════════════════ -->
-<div class="flex flex-1 overflow-hidden">
+<div class="app-shell flex flex-1 overflow-hidden">
 
   <!-- ─── SIDEBAR ────────────────────────────────────────────────── -->
-  <aside class="w-64 shrink-0 flex flex-col overflow-hidden bg-white border-r border-slate-200">
+  <aside class="sidebar w-64 shrink-0 flex flex-col overflow-hidden bg-white border-r border-slate-200">
 
     <!-- Submit -->
     <div class="shrink-0 p-4 border-b border-slate-100">
@@ -201,7 +218,7 @@
   </aside>
 
   <!-- ─── MAIN ──────────────────────────────────────────────────── -->
-  <main class="flex-1 flex flex-col overflow-hidden bg-slate-50">
+  <main class="main-panel flex-1 flex flex-col overflow-hidden bg-slate-50">
 
     <!-- Empty state -->
     <div id="emptyMain"
@@ -815,9 +832,9 @@ function mkFinding(f) {
   const sevBorder = {CRITICAL:'border-l-red-500',HIGH:'border-l-orange-400',MEDIUM:'border-l-amber-400',LOW:'border-l-blue-400'}[sev]||'border-l-slate-300';
 
   return `
-    <div class="bg-white border border-slate-200 ${sevBorder} border-l-4 rounded-xl p-5 hover:shadow-lg hover:border-slate-300 transition-all">
+    <div class="finding-card bg-white border border-slate-200 ${sevBorder} border-l-4 rounded-xl p-5 hover:shadow-lg hover:border-slate-300 transition-all">
       <!-- Header -->
-      <div class="flex items-start justify-between gap-2 mb-3">
+      <div class="finding-header flex items-start justify-between gap-2 mb-3">
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap mb-1.5">
             ${mkSev(sev)}
@@ -827,7 +844,7 @@ function mkFinding(f) {
           </div>
           <h3 class="text-sm font-semibold text-slate-800 leading-snug">${esc(f.title||'')}</h3>
         </div>
-        <div class="shrink-0 text-right max-w-[40%]">
+        <div class="finding-meta shrink-0 text-right max-w-[40%]">
           <div class="text-xs text-slate-400">置信度: <span class="font-medium text-slate-600">${esc(confLabel)}</span></div>
           ${f.reachability?`<div class="text-xs text-slate-400 mt-0.5 break-words">${esc(f.reachability)}</div>`:''}
         </div>
@@ -912,9 +929,22 @@ function mkFinding(f) {
 }
 
 function renderEvidence(ev) {
-  const numbered = ev.match(/\d+\)\s/);
+  if (Array.isArray(ev)) {
+    return ev.map((item, i) => `
+      <div class="flex items-start gap-2 mb-2.5 last:mb-0">
+        <span class="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs
+                     flex items-center justify-center font-bold mt-0.5">${i + 1}</span>
+        <div class="flex-1">${renderEvidenceText(item)}</div>
+      </div>`).join('');
+  }
+  return renderEvidenceText(ev);
+}
+
+function renderEvidenceText(ev) {
+  const text = typeof ev === 'string' ? ev : JSON.stringify(ev, null, 2);
+  const numbered = text.match(/\d+\)\s/);
   if (numbered) {
-    const steps = ev.split(/(?=\d+\)\s)/).filter(s=>s.trim());
+    const steps = text.split(/(?=\d+\)\s)/).filter(s=>s.trim());
     return steps.map(s => {
       const m = s.match(/^(\d+)\)\s*(.*)/s);
       if (!m) return `<div class="text-xs text-slate-600">${esc(s)}</div>`;
@@ -941,7 +971,7 @@ function renderEvidence(ev) {
         </div>`;
     }).join('');
   }
-  return `<div class="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">${esc(ev)}</div>`;
+  return `<div class="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">${esc(text)}</div>`;
 }
 
 // ── Summary ────────────────────────────────────────────────────────

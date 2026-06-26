@@ -57,4 +57,16 @@ class CodeAuditApplicationTest {
                 .contains("/audit/interfaces")
                 .contains("选择检测接口");
     }
+
+    @Test
+    void frontendRendersAgentScopeArrayEvidence() throws Exception {
+        String html = Files.readString(Path.of(
+                "src", "main", "resources", "static", "index.html"
+        ));
+
+        org.assertj.core.api.Assertions.assertThat(html)
+                .contains("Array.isArray(ev)")
+                .contains("renderEvidenceText(item)")
+                .doesNotContain("const numbered = ev.match");
+    }
 }
