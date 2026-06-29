@@ -566,7 +566,7 @@ public class SupervisorAgent {
             4. For each endpoint-review item, read the referenced controller method
                and decide whether it is vulnerable, safe/sec, or not applicable.
                Treat `business_intents`, `risk_hypotheses`, and
-               `suggested_poc_checks` as the harness-generated audit plan.
+               `suggested_poc_checks` / `poc_plan` as the harness-generated audit plan.
                Validate or reject each hypothesis from source evidence; do not
                execute PoC payloads in this static-review stage.
             5. For each candidate, validate the entrypoint-to-sink path against source code.
@@ -576,6 +576,8 @@ public class SupervisorAgent {
                Each finding must contain: rule_id, verdict, title, severity, confidence,
                file_path, start_line, message, evidence, vuln_type, http_method,
                http_path, entrypoint, reachability, discovery_source, data_flow_path.
+               When the task item contains a matching `poc_plan`, include it as
+               `poc_plan` and keep `stage` as `STATIC_POC_PLAN_ONLY`.
                Use verdict values CONFIRM, DOWNGRADE, or NEEDS_REVIEW. Do not
                include SUPPRESS candidates in findings.
             9. No markdown fences, no explanatory text around the JSON.

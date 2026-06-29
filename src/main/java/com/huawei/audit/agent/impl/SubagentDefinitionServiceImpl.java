@@ -88,6 +88,10 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                   or not applicable for this hunter.
                 - Report CONFIRM only with source-line evidence and the missing
                   or bypassed protection.
+                - Treat `poc_plan` as a static validation plan, not execution
+                  evidence. Do not run payloads in this stage.
+                - For confirmed findings, copy the relevant `poc_plan` item into
+                  the finding and keep `stage` as `STATIC_POC_PLAN_ONLY`.
                 - Suppress safe/sec examples instead of returning them as
                   findings.
                 - Include `endpoint_reviewed` in your JSON response.

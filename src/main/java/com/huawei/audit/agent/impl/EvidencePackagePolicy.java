@@ -209,6 +209,7 @@ final class EvidencePackagePolicy {
         summary.put("business_intents", businessIntents(entryPoint));
         summary.put("risk_hypotheses", riskHypotheses(entryPoint, hunter));
         summary.put("suggested_poc_checks", suggestedPocChecks(entryPoint, hunter));
+        summary.put("poc_plan", pocPlan(entryPoint, hunter));
         return Map.copyOf(summary);
     }
 
@@ -361,6 +362,15 @@ final class EvidencePackagePolicy {
                 .toList();
     }
 
+    private static List<Map<String, Object>> pocPlan(
+            EntryPoint entryPoint,
+            String hunter
+    ) {
+        return riskHypotheses(entryPoint, hunter).stream()
+                .map(risk -> pocPlanItem(entryPoint, risk))
+                .toList();
+    }
+
     private static Map<String, Object> risk(
             String vulnType,
             String reason,
@@ -371,6 +381,142 @@ final class EvidencePackagePolicy {
                 "reason", reason,
                 "validation", validation
         );
+    }
+
+    private static Map<String, Object> pocPlanItem(
+            EntryPoint entryPoint,
+            Map<String, Object> risk
+    ) {
+        String vulnType = risk.get("vuln_type").toString();
+        Map<String, Object> plan = new LinkedHashMap<>();
+        plan.put("stage", "STATIC_POC_PLAN_ONLY");
+        plan.put("vuln_type", vulnType);
+        plan.put("http_methods", entryPoint.httpMethods());
+        plan.put("http_path", entryPoint.path());
+        plan.put("entrypoint", entryPoint.className() + "#"
+                + entryPoint.methodName());
+        plan.put("input_hints", inputHints(entryPoint));
+        plan.put("payload_classes", payloadClasses(vulnType));
+        plan.put("observe_signals", observeSignals(vulnType));
+        plan.put("safety_constraints", List.of(
+                "Do not execute payloads during static review.",
+                "Only run this plan inside an isolated user-approved test target.",
+                "Prefer non-destructive payloads and out-of-band-safe callbacks.",
+                "Record request, response, server log and code evidence before confirming."
+        ));
+        plan.put("validation", risk.get("validation"));
+        return Map.copyOf(plan);
+    }
+
+    private static List<String> inputHints(EntryPoint entryPoint) {
+        List<String> hints = new ArrayList<>();
+        String text = endpointText(entryPoint);
+        addIfMatch(hints, text, "url/callback/uri parameter",
+                "url", "uri", "callback", "webhook", "proxy", "fetch");
+        addIfMatch(hints, text, "file/path/name parameter",
+                "file", "path", "filename", "download", "upload", "import", "export");
+        addIfMatch(hints, text, "query/filter/order parameter",
+                "query", "search", "filter", "where", "order", "sort");
+        addIfMatch(hints, text, "command/expression parameter",
+                "cmd", "command", "exec", "execute", "expression", "spel", "qlexpress");
+        addIfMatch(hints, text, "request body or uploaded document",
+                "body", "json", "xml", "xlsx", "excel", "yaml", "deserialize");
+        if (hints.isEmpty()) {
+            hints.add("inspect controller method parameters and request binding annotations");
+        }
+        return List.copyOf(hints);
+    }
+
+    private static List<String> payloadClasses(String vulnType) {
+        return switch (vulnType) {
+            case "SSRF" -> List.of(
+                    "internal metadata URL probe",
+                    "loopback/admin URL probe",
+                    "redirect-to-internal URL probe"
+            );
+            case "SQL_INJECTION" -> List.of(
+                    "boolean condition probe",
+                    "order-by expression probe",
+                    "time-delay probe only in isolated test environments"
+            );
+            case "PATH_TRAVERSAL_OR_ARBITRARY_FILE_ACCESS" -> List.of(
+                    "relative traversal path",
+                    "absolute path probe",
+                    "encoded separator traversal"
+            );
+            case "UNSAFE_PARSING_OR_DESERIALIZATION" -> List.of(
+                    "external entity resolution probe",
+                    "safe deserialization type-confusion probe",
+                    "expression/template evaluation probe"
+            );
+            case "COMMAND_OR_EXPRESSION_EXECUTION" -> List.of(
+                    "argument boundary probe",
+                    "expression arithmetic probe",
+                    "non-destructive command marker probe"
+            );
+            case "HTTP_OUTPUT_INJECTION_OR_OPEN_REDIRECT" -> List.of(
+                    "reflected marker probe",
+                    "CRLF header split probe",
+                    "external redirect allowlist-bypass probe"
+            );
+            case "BROKEN_ACCESS_CONTROL" -> List.of(
+                    "unauthenticated request probe",
+                    "low-privilege role probe",
+                    "cross-tenant object id probe"
+            );
+            case "COMPONENT_OR_CONFIGURATION_VULNERABILITY" -> List.of(
+                    "known exposed endpoint probe",
+                    "unsafe feature toggle probe",
+                    "dependency-version exploitability check"
+            );
+            default -> List.of("manual validation probe");
+        };
+    }
+
+    private static List<String> observeSignals(String vulnType) {
+        return switch (vulnType) {
+            case "SSRF" -> List.of(
+                    "server initiates outbound request",
+                    "response contains internal-service data",
+                    "network callback is observed from server host"
+            );
+            case "SQL_INJECTION" -> List.of(
+                    "response differs between true/false predicates",
+                    "database error references generated SQL",
+                    "isolated time-delay signal is reproducible"
+            );
+            case "PATH_TRAVERSAL_OR_ARBITRARY_FILE_ACCESS" -> List.of(
+                    "response reads file outside intended directory",
+                    "write lands outside configured upload/export directory",
+                    "canonical path confinement is absent in source"
+            );
+            case "UNSAFE_PARSING_OR_DESERIALIZATION" -> List.of(
+                    "parser resolves external resource",
+                    "unsafe type is accepted",
+                    "expression result affects response or server state"
+            );
+            case "COMMAND_OR_EXPRESSION_EXECUTION" -> List.of(
+                    "controlled command argument reaches process/expression API",
+                    "non-destructive marker appears in response or logs",
+                    "allowlist/sanitizer can be bypassed"
+            );
+            case "HTTP_OUTPUT_INJECTION_OR_OPEN_REDIRECT" -> List.of(
+                    "marker is reflected without context encoding",
+                    "response header contains injected delimiter/effect",
+                    "redirect target leaves trusted origin"
+            );
+            case "BROKEN_ACCESS_CONTROL" -> List.of(
+                    "operation succeeds without authentication",
+                    "low-privilege user accesses privileged resource",
+                    "cross-tenant object access succeeds"
+            );
+            case "COMPONENT_OR_CONFIGURATION_VULNERABILITY" -> List.of(
+                    "dangerous endpoint or feature is reachable",
+                    "dependency version maps to exploitable CVE",
+                    "runtime configuration enables unsafe behavior"
+            );
+            default -> List.of("source and runtime evidence confirm impact");
+        };
     }
 
     private static String primaryRisk(Map<String, Object> endpoint) {

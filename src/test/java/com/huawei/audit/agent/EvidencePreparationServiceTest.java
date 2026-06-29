@@ -154,6 +154,17 @@ class EvidencePreparationServiceTest {
                 .singleElement()
                 .satisfies(endpoint -> assertThat(endpoint.path("path").asText())
                         .isEqualTo("/xss/reflect"));
+        assertThat(taskJson.path("endpoint_review_surface").get(0).path("poc_plan"))
+                .singleElement()
+                .satisfies(plan -> {
+                    assertThat(plan.path("stage").asText())
+                            .isEqualTo("STATIC_POC_PLAN_ONLY");
+                    assertThat(plan.path("vuln_type").asText())
+                            .isEqualTo("HTTP_OUTPUT_INJECTION_OR_OPEN_REDIRECT");
+                    assertThat(plan.path("payload_classes"))
+                            .extracting(item -> item.asText())
+                            .contains("reflected marker probe");
+                });
         Path endpointChunk = Path.of(taskJson.path("endpoint_review_chunks")
                 .get(0)
                 .asText());

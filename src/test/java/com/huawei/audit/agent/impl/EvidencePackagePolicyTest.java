@@ -143,6 +143,22 @@ class EvidencePackagePolicyTest {
             assertThat(surface.get("suggested_poc_checks"))
                     .asList()
                     .isNotEmpty();
+            assertThat(surface.get("poc_plan"))
+                    .asList()
+                    .singleElement()
+                    .satisfies(plan -> {
+                        Map<?, ?> poc = (Map<?, ?>) plan;
+                        assertThat(poc.get("stage"))
+                                .isEqualTo("STATIC_POC_PLAN_ONLY");
+                        assertThat(poc.get("vuln_type"))
+                                .isEqualTo("UNSAFE_PARSING_OR_DESERIALIZATION");
+                        assertThat(poc.get("payload_classes"))
+                                .asList()
+                                .contains("external entity resolution probe");
+                        assertThat(poc.get("safety_constraints"))
+                                .asList()
+                                .contains("Do not execute payloads during static review.");
+                    });
         });
 
         assertThat(EvidencePackagePolicy.endpointReviewSurface(
