@@ -114,7 +114,8 @@ final class EvidencePackagePolicy {
             Map<String, Object> summary = endpointSummary(
                     entryPoint,
                     reachable,
-                    "authorization-surface"
+                    "authorization-surface",
+                    "authorization"
             );
             result.add(Map.copyOf(summary));
         }
@@ -127,9 +128,6 @@ final class EvidencePackagePolicy {
             List<CandidatePath> candidates
     ) {
         Set<String> keywords = endpointKeywords(hunter);
-        if (keywords.isEmpty()) {
-            return List.of();
-        }
         Map<String, List<CandidatePath>> candidatesByEntry = candidates.stream()
                 .filter(candidate -> candidate.entryPoint() != null)
                 .collect(Collectors.groupingBy(
@@ -137,11 +135,14 @@ final class EvidencePackagePolicy {
                 ));
         return entryPoints.stream()
                 .filter(entryPoint -> isAuthorizationProtocol(entryPoint.protocol()))
-                .filter(entryPoint -> containsAny(entryPoint, keywords))
+                .filter(entryPoint -> (!keywords.isEmpty()
+                        && containsAny(entryPoint, keywords))
+                        || !riskHypotheses(entryPoint, hunter).isEmpty())
                 .map(entryPoint -> endpointSummary(
                         entryPoint,
                         candidatesByEntry.getOrDefault(entryPoint.id(), List.of()),
-                        "keyword-surface"
+                        "business-intent-surface",
+                        hunter
                 ))
                 .toList();
     }
@@ -149,7 +150,8 @@ final class EvidencePackagePolicy {
     private static Map<String, Object> endpointSummary(
             EntryPoint entryPoint,
             List<CandidatePath> reachable,
-            String discoverySource
+            String discoverySource,
+            String hunter
     ) {
         List<String> sinkCategories = reachable.stream()
                 .map(candidate -> candidate.sink().category())
@@ -179,6 +181,9 @@ final class EvidencePackagePolicy {
         summary.put("candidate_path_count", reachable.size());
         summary.put("minimum_call_depth", minimumCallDepth);
         summary.put("discovery_source", discoverySource);
+        summary.put("business_intents", businessIntents(entryPoint));
+        summary.put("risk_hypotheses", riskHypotheses(entryPoint, hunter));
+        summary.put("suggested_poc_checks", suggestedPocChecks(entryPoint, hunter));
         return Map.copyOf(summary);
     }
 
@@ -219,14 +224,159 @@ final class EvidencePackagePolicy {
         };
     }
 
+    private static List<String> businessIntents(EntryPoint entryPoint) {
+        String text = endpointText(entryPoint);
+        List<String> intents = new ArrayList<>();
+        addIfMatch(intents, text, "FILE_IMPORT_UPLOAD",
+                "upload", "import", "multipart", "xlsx", "excel", "xml", "zip");
+        addIfMatch(intents, text, "FILE_EXPORT_DOWNLOAD",
+                "download", "export", "file", "attachment", "read");
+        addIfMatch(intents, text, "SERVER_SIDE_FETCH_CALLBACK",
+                "callback", "webhook", "url", "uri", "proxy", "fetch",
+                "httpclient", "okhttp", "urlconnection", "resttemplate", "webclient");
+        addIfMatch(intents, text, "NAVIGATION_REDIRECT_CALLBACK",
+                "redirect", "returnurl", "return_url", "callback", "jsonp");
+        addIfMatch(intents, text, "QUERY_CONSTRUCTION",
+                "search", "query", "filter", "where", "order", "sort", "sql");
+        addIfMatch(intents, text, "REMOTE_OPERATION_EXECUTION",
+                "cmd", "command", "exec", "execute", "process", "runtime", "rce");
+        addIfMatch(intents, text, "STRUCTURED_DOCUMENT_PARSE",
+                "xxe", "xml", "sax", "dom4j", "jdom", "poi", "xlsx", "excel", "yaml");
+        addIfMatch(intents, text, "OBJECT_DESERIALIZATION",
+                "deserialize", "deserialization", "unserialize", "fastjson", "xstream");
+        addIfMatch(intents, text, "EXPRESSION_TEMPLATE_EVAL",
+                "spel", "ognl", "qlexpress", "expression", "template",
+                "velocity", "ssti");
+        addIfMatch(intents, text, "AUTH_SESSION",
+                "login", "auth", "token", "jwt", "session", "cookie");
+        addIfMatch(intents, text, "AUTHORIZATION_ADMIN",
+                "admin", "role", "permission", "privilege", "user");
+        addIfMatch(intents, text, "HTTP_RESPONSE_SHAPING",
+                "xss", "jsonp", "cors", "header", "cookie", "response", "crlf");
+        addIfMatch(intents, text, "COMPONENT_DYNAMIC_LOOKUP",
+                "log4j", "jndi", "actuator", "druid", "swagger", "shiro");
+        return List.copyOf(intents);
+    }
+
+    private static List<Map<String, Object>> riskHypotheses(
+            EntryPoint entryPoint,
+            String hunter
+    ) {
+        List<String> intents = businessIntents(entryPoint);
+        List<Map<String, Object>> risks = new ArrayList<>();
+        if ("file_operations".equals(hunter)
+                && containsIntent(intents, "FILE_IMPORT_UPLOAD", "FILE_EXPORT_DOWNLOAD")) {
+            risks.add(risk("PATH_TRAVERSAL_OR_ARBITRARY_FILE_ACCESS",
+                    "file-oriented business endpoint",
+                    "Check whether request-controlled filename/path is canonicalized and confined."));
+        }
+        if ("unsafe_parsing".equals(hunter)
+                && containsIntent(intents, "FILE_IMPORT_UPLOAD", "STRUCTURED_DOCUMENT_PARSE",
+                "OBJECT_DESERIALIZATION", "EXPRESSION_TEMPLATE_EVAL")) {
+            risks.add(risk("UNSAFE_PARSING_OR_DESERIALIZATION",
+                    "parser/import/expression-oriented business endpoint",
+                    "Check parser hardening, type allowlists, expression evaluation and safe examples."));
+        }
+        if ("ssrf".equals(hunter)
+                && containsIntent(intents, "SERVER_SIDE_FETCH_CALLBACK")) {
+            risks.add(risk("SSRF",
+                    "server-side URL/callback/proxy business endpoint",
+                    "Check URL source, host/IP allowlist, redirects and internal-network reachability."));
+        }
+        if ("sql_injection".equals(hunter)
+                && containsIntent(intents, "QUERY_CONSTRUCTION")) {
+            risks.add(risk("SQL_INJECTION",
+                    "query/filter/order business endpoint",
+                    "Check string concatenation, MyBatis ${}, dynamic order-by and parameter binding."));
+        }
+        if ("code_execution".equals(hunter)
+                && containsIntent(intents, "REMOTE_OPERATION_EXECUTION",
+                "EXPRESSION_TEMPLATE_EVAL")) {
+            risks.add(risk("COMMAND_OR_EXPRESSION_EXECUTION",
+                    "remote operation/expression business endpoint",
+                    "Check command construction, ProcessBuilder arguments and expression allowlists."));
+        }
+        if ("http_output".equals(hunter)
+                && containsIntent(intents, "HTTP_RESPONSE_SHAPING",
+                "NAVIGATION_REDIRECT_CALLBACK", "FILE_EXPORT_DOWNLOAD")) {
+            risks.add(risk("HTTP_OUTPUT_INJECTION_OR_OPEN_REDIRECT",
+                    "response/header/redirect/download business endpoint",
+                    "Check reflected output encoding, header CRLF, redirect allowlists and CORS policy."));
+        }
+        if ("authorization".equals(hunter)
+                && containsIntent(intents, "AUTH_SESSION", "AUTHORIZATION_ADMIN",
+                "REMOTE_OPERATION_EXECUTION", "FILE_EXPORT_DOWNLOAD", "FILE_IMPORT_UPLOAD")) {
+            risks.add(risk("BROKEN_ACCESS_CONTROL",
+                    "sensitive business endpoint",
+                    "Check method security, global filters, role checks and tenant/resource ownership."));
+        }
+        if ("component_vulns".equals(hunter)
+                && containsIntent(intents, "COMPONENT_DYNAMIC_LOOKUP",
+                "OBJECT_DESERIALIZATION")) {
+            risks.add(risk("COMPONENT_OR_CONFIGURATION_VULNERABILITY",
+                    "component-specific exposed endpoint",
+                    "Check dependency/config exposure and known dangerous framework features."));
+        }
+        return List.copyOf(risks);
+    }
+
+    private static List<String> suggestedPocChecks(
+            EntryPoint entryPoint,
+            String hunter
+    ) {
+        return riskHypotheses(entryPoint, hunter).stream()
+                .map(risk -> risk.get("validation").toString())
+                .toList();
+    }
+
+    private static Map<String, Object> risk(
+            String vulnType,
+            String reason,
+            String validation
+    ) {
+        return Map.of(
+                "vuln_type", vulnType,
+                "reason", reason,
+                "validation", validation
+        );
+    }
+
+    private static boolean containsIntent(List<String> intents, String... expected) {
+        Set<String> intentSet = Set.copyOf(intents);
+        for (String item : expected) {
+            if (intentSet.contains(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void addIfMatch(
+            List<String> intents,
+            String text,
+            String intent,
+            String... keywords
+    ) {
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) {
+                intents.add(intent);
+                return;
+            }
+        }
+    }
+
     private static boolean containsAny(EntryPoint entryPoint, Set<String> keywords) {
-        String haystack = String.join(" ",
+        String haystack = endpointText(entryPoint);
+        return keywords.stream().anyMatch(haystack::contains);
+    }
+
+    private static String endpointText(EntryPoint entryPoint) {
+        return String.join(" ",
                 entryPoint.path(),
                 entryPoint.className(),
                 entryPoint.methodName(),
                 entryPoint.filePath()
         ).toLowerCase(Locale.ROOT);
-        return keywords.stream().anyMatch(haystack::contains);
     }
 
     private static Comparator<CandidatePath> candidatePriority() {

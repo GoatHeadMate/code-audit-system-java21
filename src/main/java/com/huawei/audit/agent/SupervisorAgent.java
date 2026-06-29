@@ -560,6 +560,10 @@ public class SupervisorAgent {
                For authorization, also review every endpoint in `authorization_surface`.
             4. For each endpoint-review item, read the referenced controller method
                and decide whether it is vulnerable, safe/sec, or not applicable.
+               Treat `business_intents`, `risk_hypotheses`, and
+               `suggested_poc_checks` as the harness-generated audit plan.
+               Validate or reject each hypothesis from source evidence; do not
+               execute PoC payloads in this static-review stage.
             5. For each candidate, validate the entrypoint-to-sink path against source code.
             6. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
             7. Never execute shell commands, create files, or delegate to another agent.

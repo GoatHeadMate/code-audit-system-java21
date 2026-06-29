@@ -107,7 +107,7 @@ class EvidencePackagePolicyTest {
         )).singleElement().satisfies(surface -> {
             assertThat(surface)
                     .containsEntry("path", "/xss/reflect")
-                    .containsEntry("discovery_source", "keyword-surface");
+                    .containsEntry("discovery_source", "business-intent-surface");
         });
 
         assertThat(EvidencePackagePolicy.endpointReviewSurface(
@@ -116,6 +116,56 @@ class EvidencePackagePolicyTest {
                 List.of()
         )).singleElement().satisfies(surface ->
                 assertThat(surface).containsEntry("path", "/xxe/dom4j"));
+    }
+
+    @Test
+    void derivesBusinessIntentRiskHypothesesForComplexBusinessEndpoints() {
+        EntryPoint importExcel = entryPoint("import-1", "/api/data/importExcel",
+                "DataImportController", "upload");
+        EntryPoint callback = entryPoint("callback-1", "/notify/callbackUrl",
+                "CallbackController", "notify");
+        EntryPoint search = entryPoint("search-1", "/orders/search",
+                "OrderController", "query");
+
+        assertThat(EvidencePackagePolicy.endpointReviewSurface(
+                "unsafe_parsing",
+                List.of(importExcel, callback, search),
+                List.of()
+        )).singleElement().satisfies(surface -> {
+            assertThat(surface.get("business_intents"))
+                    .asList()
+                    .contains("FILE_IMPORT_UPLOAD", "STRUCTURED_DOCUMENT_PARSE");
+            assertThat(surface.get("risk_hypotheses"))
+                    .asList()
+                    .anySatisfy(risk -> assertThat(
+                            ((Map<?, ?>) risk).get("vuln_type")
+                    ).isEqualTo("UNSAFE_PARSING_OR_DESERIALIZATION"));
+            assertThat(surface.get("suggested_poc_checks"))
+                    .asList()
+                    .isNotEmpty();
+        });
+
+        assertThat(EvidencePackagePolicy.endpointReviewSurface(
+                "ssrf",
+                List.of(importExcel, callback, search),
+                List.of()
+        )).singleElement().satisfies(surface ->
+                assertThat(surface.get("risk_hypotheses"))
+                        .asList()
+                        .anySatisfy(risk -> assertThat(
+                                ((Map<?, ?>) risk).get("vuln_type")
+                        ).isEqualTo("SSRF")));
+
+        assertThat(EvidencePackagePolicy.endpointReviewSurface(
+                "sql_injection",
+                List.of(importExcel, callback, search),
+                List.of()
+        )).singleElement().satisfies(surface ->
+                assertThat(surface.get("risk_hypotheses"))
+                        .asList()
+                        .anySatisfy(risk -> assertThat(
+                                ((Map<?, ?>) risk).get("vuln_type")
+                        ).isEqualTo("SQL_INJECTION")));
     }
 
     private EntryPoint entryPoint(
