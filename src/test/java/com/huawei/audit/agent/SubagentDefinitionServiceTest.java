@@ -56,4 +56,23 @@ class SubagentDefinitionServiceTest {
                 .extracting(skill -> skill.getSkillId())
                 .containsExactly("audit-sql-injection_audit");
     }
+
+    @Test
+    void dynamicTeamAndBatchNamesReuseBaseHunterSkill() throws Exception {
+        Map<String, String> result = new SubagentDefinitionServiceImpl().materialize(
+                tempDir,
+                List.of(
+                        "ssrf_team_ssrf",
+                        "ssrf_team_ssrf_batch_1"
+                ),
+                Map.of(
+                        "ssrf_team_ssrf", "/path/to/task.json",
+                        "ssrf_team_ssrf_batch_1", "/path/to/task-batch-1.json"
+                )
+        );
+
+        assertThat(result).containsExactly(Map.entry("ssrf", "audit-ssrf"));
+        assertThat(tempDir.resolve(".claude/skills/audit-ssrf/SKILL.md"))
+                .isRegularFile();
+    }
 }

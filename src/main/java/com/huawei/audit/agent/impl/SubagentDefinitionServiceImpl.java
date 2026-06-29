@@ -50,7 +50,9 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
 
     static String baseHunterName(String hunter) {
         int batchIdx = hunter.indexOf("_batch_");
-        return batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+        String withoutBatch = batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+        int teamIdx = withoutBatch.indexOf("_team_");
+        return teamIdx >= 0 ? withoutBatch.substring(0, teamIdx) : withoutBatch;
     }
 
     private String buildSkill(

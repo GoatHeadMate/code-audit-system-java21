@@ -376,7 +376,9 @@ public class SupervisorAgent {
 
     private static String baseHunterName(String hunter) {
         int batchIdx = hunter.indexOf("_batch_");
-        return batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+        String withoutBatch = batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+        int teamIdx = withoutBatch.indexOf("_team_");
+        return teamIdx >= 0 ? withoutBatch.substring(0, teamIdx) : withoutBatch;
     }
 
     private static String skillId(String skillName) {
@@ -555,6 +557,9 @@ public class SupervisorAgent {
             1. Load your `%s` skill with load_skill_through_path before making judgments.
             2. Read the task file to get all candidate-path, stored-candidate,
                and endpoint-review chunks.
+               If `team_name` / `team_focus` are present, treat them as the
+               dynamic business-risk team assignment and keep the review scoped
+               to that focus.
             3. Review EVERY candidate-path chunk, stored-candidate chunk, and
                endpoint in `endpoint_review_chunks` / `endpoint_review_surface`.
                For authorization, also review every endpoint in `authorization_surface`.

@@ -150,47 +150,38 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                     );
             Path hunterDir = packageDirectory.resolve(hunter);
             Files.createDirectories(hunterDir);
-            List<String> candChunks = writeChunks(hunterDir, "candidates", relevant);
-            List<String> storedChunks = writeChunks(hunterDir, "stored-candidates", relevantStored);
-            List<String> endpointChunks = writeChunks(
-                    hunterDir,
-                    "endpoint-review",
-                    endpointSurface,
-                    ENDPOINT_ITEMS_PER_CHUNK
-            );
-            List<String> reviewCandidateChunks = relevant.isEmpty()
-                    ? List.of()
-                    : candChunks;
-            List<String> reviewStoredChunks = relevantStored.isEmpty()
-                    ? List.of()
-                    : storedChunks;
-            List<String> reviewEndpointChunks = endpointSurface.isEmpty()
-                    ? List.of()
-                    : endpointChunks;
+            if (!relevant.isEmpty()
+                    || !relevantStored.isEmpty()
+                    || "authorization".equals(hunter)) {
+                List<String> candChunks = relevant.isEmpty()
+                        ? List.of()
+                        : writeChunks(hunterDir, "candidates", relevant);
+                List<String> storedChunks = relevantStored.isEmpty()
+                        ? List.of()
+                        : writeChunks(hunterDir, "stored-candidates", relevantStored);
+                registerReviewTask(hunter, hunterDir, sourceRoot, indexFile,
+                        relevant.size(), candChunks,
+                        relevantStored.size(), storedChunks,
+                        List.of(), List.of(), 0,
+                        "candidate-path-validation",
+                        analysis, maxChunks, manifest, expandedCandidates, job);
+            }
 
-            int totalChunks = reviewCandidateChunks.size()
-                    + reviewStoredChunks.size()
-                    + reviewEndpointChunks.size();
-            int totalReviewItems = relevant.size()
-                    + relevantStored.size()
-                    + endpointSurface.size();
-            if (totalChunks <= maxChunks
-                    && totalReviewItems <= MAX_REVIEW_ITEMS_PER_AGENT) {
-                Path taskFile = hunterDir.resolve("task.json");
-                writeTaskFile(taskFile, hunter, sourceRoot, indexFile,
-                        relevant.size(), reviewCandidateChunks,
-                        relevantStored.size(), reviewStoredChunks,
-                        endpointSurface, reviewEndpointChunks,
-                        analysis);
-                manifest.put(hunter, absolute(taskFile));
-                expandedCandidates.add(hunter);
-            } else {
-                splitIntoBatches(hunter, hunterDir, sourceRoot, indexFile,
-                        reviewCandidateChunks,
-                        reviewStoredChunks,
-                        reviewEndpointChunks,
-                        analysis,
-                        maxChunks, manifest, expandedCandidates, job);
+            for (EvidencePackagePolicy.EndpointReviewTeam team :
+                    EvidencePackagePolicy.endpointReviewTeams(hunter, endpointSurface)) {
+                Path teamDir = hunterDir.resolve(team.teamName());
+                Files.createDirectories(teamDir);
+                List<String> endpointChunks = writeChunks(
+                        teamDir,
+                        "endpoint-review",
+                        team.endpoints(),
+                        ENDPOINT_ITEMS_PER_CHUNK
+                );
+                registerReviewTask(team.teamName(), teamDir, sourceRoot, indexFile,
+                        0, List.of(), 0, List.of(),
+                        team.endpoints(), endpointChunks, team.endpoints().size(),
+                        team.focus(),
+                        analysis, maxChunks, manifest, expandedCandidates, job);
             }
         }
 
@@ -213,11 +204,49 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                 List.copyOf(expandedCandidates));
     }
 
+    private void registerReviewTask(
+            String taskName, Path taskDir, Path sourceRoot, Path indexFile,
+            int candidateCount, List<String> candidateChunks,
+            int storedCount, List<String> storedChunks,
+            List<Map<String, Object>> endpointSurface,
+            List<String> endpointChunks,
+            int endpointCount,
+            String teamFocus,
+            WhiteBoxAnalysisService.AnalysisResult analysis,
+            int maxChunks, Map<String, String> manifest,
+            List<String> expandedCandidates, AuditJob job
+    ) throws Exception {
+        int totalChunks = candidateChunks.size()
+                + storedChunks.size()
+                + endpointChunks.size();
+        int totalReviewItems = candidateCount + storedCount + endpointCount;
+        if (totalChunks <= maxChunks
+                && totalReviewItems <= MAX_REVIEW_ITEMS_PER_AGENT) {
+            Path taskFile = taskDir.resolve("task.json");
+            writeTaskFile(taskFile, taskName, sourceRoot, indexFile,
+                    candidateCount, candidateChunks,
+                    storedCount, storedChunks,
+                    endpointSurface, endpointChunks, endpointCount,
+                    teamFocus, analysis);
+            manifest.put(taskName, absolute(taskFile));
+            expandedCandidates.add(taskName);
+            return;
+        }
+        splitIntoBatches(taskName, taskDir, sourceRoot, indexFile,
+                candidateChunks,
+                storedChunks,
+                endpointChunks,
+                teamFocus,
+                analysis,
+                maxChunks, manifest, expandedCandidates, job);
+    }
+
     private void splitIntoBatches(
             String hunter, Path hunterDir, Path sourceRoot, Path indexFile,
             List<String> candChunks,
             List<String> storedChunks,
             List<String> endpointChunks,
+            String teamFocus,
             WhiteBoxAnalysisService.AnalysisResult analysis,
             int maxChunks, Map<String, String> manifest,
             List<String> expandedCandidates, AuditJob job
@@ -256,6 +285,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             writeTaskFile(batchFile, hunter, sourceRoot, indexFile,
                     bcCount, bc, bsCount, bs,
                     List.of(), be, beCount,
+                    teamFocus,
                     analysis);
             manifest.put(batchName, absolute(batchFile));
             expandedCandidates.add(batchName);
@@ -282,7 +312,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     ) throws Exception {
         writeTaskFile(taskFile, hunter, sourceRoot, indexFile,
                 candidateCount, candidateChunks, storedCount, storedChunks,
-                endpointSurface, endpointChunks, endpointSurface.size(), analysis);
+                endpointSurface, endpointChunks, endpointSurface.size(),
+                "general", analysis);
     }
 
     private void writeTaskFile(
@@ -292,11 +323,15 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<Map<String, Object>> endpointSurface,
             List<String> endpointChunks,
             int endpointCount,
+            String teamFocus,
             WhiteBoxAnalysisService.AnalysisResult analysis
     ) throws Exception {
+        String baseHunter = EvidencePackagePolicy.baseHunterName(hunter);
         Map<String, Object> task = new LinkedHashMap<>();
         task.put("mode", "candidate-path-whitebox");
-        task.put("hunter", hunter);
+        task.put("hunter", baseHunter);
+        task.put("team_name", hunter);
+        task.put("team_focus", teamFocus);
         task.put("source_root", sourceRoot.toAbsolutePath().normalize().toString());
         task.put("analysis_index", absolute(indexFile));
         task.put("candidate_sink_categories", EvidencePackagePolicy.sinkCategories(hunter));
@@ -306,7 +341,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         task.put("stored_candidate_chunks", storedChunks);
         task.put("endpoint_review_count", endpointCount);
         task.put("endpoint_review_chunks", endpointChunks);
-        if ("authorization".equals(hunter)) {
+        if ("authorization".equals(baseHunter)) {
             task.put("authorization_surface",
                     EvidencePackagePolicy.authorizationSurface(
                             analysis.entryPoints(), analysis.candidatePaths()));

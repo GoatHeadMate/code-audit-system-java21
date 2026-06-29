@@ -163,9 +163,38 @@ class EvidencePackagePolicyTest {
         )).singleElement().satisfies(surface ->
                 assertThat(surface.get("risk_hypotheses"))
                         .asList()
-                        .anySatisfy(risk -> assertThat(
-                                ((Map<?, ?>) risk).get("vuln_type")
-                        ).isEqualTo("SQL_INJECTION")));
+                .anySatisfy(risk -> assertThat(
+                        ((Map<?, ?>) risk).get("vuln_type")
+                ).isEqualTo("SQL_INJECTION")));
+    }
+
+    @Test
+    void groupsEndpointReviewSurfaceIntoDynamicRiskTeams() {
+        EntryPoint callback = entryPoint("callback-1", "/notify/callbackUrl",
+                "CallbackController", "notify");
+        EntryPoint proxy = entryPoint("proxy-1", "/api/proxy/url",
+                "ProxyController", "fetchUrl");
+
+        List<Map<String, Object>> surface = EvidencePackagePolicy.endpointReviewSurface(
+                "ssrf",
+                List.of(callback, proxy),
+                List.of()
+        );
+
+        assertThat(EvidencePackagePolicy.endpointReviewTeams("ssrf", surface))
+                .singleElement()
+                .satisfies(team -> {
+                    assertThat(team.teamName()).isEqualTo("ssrf_team_ssrf");
+                    assertThat(team.focus()).isEqualTo("SSRF");
+                    assertThat(team.endpoints()).hasSize(2);
+                });
+    }
+
+    @Test
+    void resolvesBaseHunterFromDynamicTeamAndBatchNames() {
+        assertThat(EvidencePackagePolicy.baseHunterName(
+                "unsafe_parsing_team_unsafe_parsing_or_deserialization_batch_2"
+        )).isEqualTo("unsafe_parsing");
     }
 
     private EntryPoint entryPoint(

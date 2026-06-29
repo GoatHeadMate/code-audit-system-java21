@@ -138,9 +138,16 @@ class EvidencePreparationServiceTest {
                 List.of()
         );
 
-        Path task = Path.of(result.manifest().get("http_output"));
+        Path task = Path.of(result.manifest().get(
+                "http_output_team_http_output_injection_or_open_redirect"
+        ));
         assertThat(task).isRegularFile();
         var taskJson = mapper.readTree(task.toFile());
+        assertThat(taskJson.path("hunter").asText()).isEqualTo("http_output");
+        assertThat(taskJson.path("team_name").asText())
+                .isEqualTo("http_output_team_http_output_injection_or_open_redirect");
+        assertThat(taskJson.path("team_focus").asText())
+                .isEqualTo("HTTP_OUTPUT_INJECTION_OR_OPEN_REDIRECT");
         assertThat(taskJson.path("candidate_count").asInt()).isZero();
         assertThat(taskJson.path("endpoint_review_count").asInt()).isEqualTo(1);
         assertThat(taskJson.path("endpoint_review_surface"))
@@ -198,13 +205,23 @@ class EvidencePreparationServiceTest {
         );
 
         assertThat(result.expandedCandidates())
-                .containsExactly("http_output_batch_1", "http_output_batch_2");
+                .containsExactly(
+                        "http_output_team_http_output_injection_or_open_redirect_batch_1",
+                        "http_output_team_http_output_injection_or_open_redirect_batch_2"
+                );
         var first = mapper.readTree(
-                Path.of(result.manifest().get("http_output_batch_1")).toFile()
+                Path.of(result.manifest().get(
+                        "http_output_team_http_output_injection_or_open_redirect_batch_1"
+                )).toFile()
         );
         var second = mapper.readTree(
-                Path.of(result.manifest().get("http_output_batch_2")).toFile()
+                Path.of(result.manifest().get(
+                        "http_output_team_http_output_injection_or_open_redirect_batch_2"
+                )).toFile()
         );
+        assertThat(first.path("hunter").asText()).isEqualTo("http_output");
+        assertThat(first.path("team_focus").asText())
+                .isEqualTo("HTTP_OUTPUT_INJECTION_OR_OPEN_REDIRECT");
         assertThat(first.path("endpoint_review_count").asInt()).isEqualTo(30);
         assertThat(second.path("endpoint_review_count").asInt()).isEqualTo(6);
         assertThat(first.path("endpoint_review_chunks")).hasSize(2);

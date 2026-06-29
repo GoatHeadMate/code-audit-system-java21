@@ -53,14 +53,14 @@ final class EvidencePackagePolicy {
     }
 
     static Set<String> sinkCategories(String hunter) {
-        return HUNTER_SINKS.getOrDefault(hunter, Set.of());
+        return HUNTER_SINKS.getOrDefault(baseHunterName(hunter), Set.of());
     }
 
     static List<CandidatePath> relevantCandidates(
             String hunter,
             List<CandidatePath> candidates
     ) {
-        Set<String> categories = HUNTER_SINKS.get(hunter);
+        Set<String> categories = HUNTER_SINKS.get(baseHunterName(hunter));
         if (categories == null) {
             return List.of();
         }
@@ -75,7 +75,7 @@ final class EvidencePackagePolicy {
             String hunter,
             List<StoredCandidate> candidates
     ) {
-        Set<String> categories = HUNTER_SINKS.get(hunter);
+        Set<String> categories = HUNTER_SINKS.get(baseHunterName(hunter));
         if (categories == null) {
             return List.of();
         }
@@ -127,7 +127,8 @@ final class EvidencePackagePolicy {
             List<EntryPoint> entryPoints,
             List<CandidatePath> candidates
     ) {
-        Set<String> keywords = endpointKeywords(hunter);
+        String baseHunter = baseHunterName(hunter);
+        Set<String> keywords = endpointKeywords(baseHunter);
         Map<String, List<CandidatePath>> candidatesByEntry = candidates.stream()
                 .filter(candidate -> candidate.entryPoint() != null)
                 .collect(Collectors.groupingBy(
@@ -137,12 +138,36 @@ final class EvidencePackagePolicy {
                 .filter(entryPoint -> isAuthorizationProtocol(entryPoint.protocol()))
                 .filter(entryPoint -> (!keywords.isEmpty()
                         && containsAny(entryPoint, keywords))
-                        || !riskHypotheses(entryPoint, hunter).isEmpty())
+                        || !riskHypotheses(entryPoint, baseHunter).isEmpty())
                 .map(entryPoint -> endpointSummary(
                         entryPoint,
                         candidatesByEntry.getOrDefault(entryPoint.id(), List.of()),
                         "business-intent-surface",
-                        hunter
+                        baseHunter
+                ))
+                .toList();
+    }
+
+    static List<EndpointReviewTeam> endpointReviewTeams(
+            String hunter,
+            List<Map<String, Object>> endpointSurface
+    ) {
+        String baseHunter = baseHunterName(hunter);
+        Map<String, EndpointReviewTeamBuilder> builders = new LinkedHashMap<>();
+        for (Map<String, Object> endpoint : endpointSurface) {
+            String focus = primaryRisk(endpoint);
+            String slug = slug(focus);
+            String teamName = baseHunter + "_team_" + slug;
+            builders.computeIfAbsent(
+                    teamName,
+                    ignored -> new EndpointReviewTeamBuilder(teamName, focus)
+            ).endpoints().add(endpoint);
+        }
+        return builders.values().stream()
+                .map(builder -> new EndpointReviewTeam(
+                        builder.teamName(),
+                        builder.focus(),
+                        List.copyOf(builder.endpoints())
                 ))
                 .toList();
     }
@@ -222,6 +247,13 @@ final class EvidencePackagePolicy {
             );
             default -> Set.of();
         };
+    }
+
+    static String baseHunterName(String hunter) {
+        int batchIdx = hunter.indexOf("_batch_");
+        String withoutBatch = batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
+        int teamIdx = withoutBatch.indexOf("_team_");
+        return teamIdx >= 0 ? withoutBatch.substring(0, teamIdx) : withoutBatch;
     }
 
     private static List<String> businessIntents(EntryPoint entryPoint) {
@@ -341,6 +373,26 @@ final class EvidencePackagePolicy {
         );
     }
 
+    private static String primaryRisk(Map<String, Object> endpoint) {
+        Object value = endpoint.get("risk_hypotheses");
+        if (value instanceof List<?> risks
+                && !risks.isEmpty()
+                && risks.get(0) instanceof Map<?, ?> risk) {
+            Object vulnType = risk.get("vuln_type");
+            if (vulnType != null && !vulnType.toString().isBlank()) {
+                return vulnType.toString();
+            }
+        }
+        return "GENERAL_ENDPOINT_REVIEW";
+    }
+
+    private static String slug(String value) {
+        String slug = value.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "_")
+                .replaceAll("^_+|_+$", "");
+        return slug.isBlank() ? "general" : slug;
+    }
+
     private static boolean containsIntent(List<String> intents, String... expected) {
         Set<String> intentSet = Set.copyOf(intents);
         for (String item : expected) {
@@ -420,5 +472,21 @@ final class EvidencePackagePolicy {
         summary.put("sinks_by_category", coverage.sinksByCategory());
         summary.put("candidate_paths_by_sink", coverage.candidatePathsBySink());
         return Map.copyOf(summary);
+    }
+
+    record EndpointReviewTeam(
+            String teamName,
+            String focus,
+            List<Map<String, Object>> endpoints
+    ) { }
+
+    private record EndpointReviewTeamBuilder(
+            String teamName,
+            String focus,
+            List<Map<String, Object>> endpoints
+    ) {
+        EndpointReviewTeamBuilder(String teamName, String focus) {
+            this(teamName, focus, new ArrayList<>());
+        }
     }
 }
