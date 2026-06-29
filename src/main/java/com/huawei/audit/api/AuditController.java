@@ -232,7 +232,7 @@ public class AuditController {
                 "agent_runtime", "agentscope-java-harness",
                 "intelligent_orchestrator", orchestratorProperties.enabled(),
                 "analysis_engine", "jdk-ast-whitebox",
-                "agent_framework", "agentscope-java+langgraph4j",
+                "agent_framework", "agentscope-java",
                 "agent_topology", "one-supervisor+agentscope-subagents",
                 "agent_transport", "in-process-java",
                 "scan_strategy", "candidate-path-whitebox"

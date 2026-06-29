@@ -103,6 +103,115 @@ class EvidencePreparationServiceTest {
     }
 
     @Test
+    void writesEndpointReviewChunksForKeywordMatchedEndpoints() throws Exception {
+        Path source = tempDir.resolve("surface-source");
+        Files.createDirectories(source);
+        Files.writeString(source.resolve("XssController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class XssController {
+                    @GetMapping("/xss/reflect")
+                    String reflect(@RequestParam String q) {
+                        return q;
+                    }
+                }
+                """);
+
+        ObjectMapper mapper = new ObjectMapper();
+        EvidencePreparationService service = new EvidencePreparationServiceImpl(
+                new WhiteBoxAnalysisServiceImpl(List.of(new HttpEndpointScanner())),
+                mapper,
+                new JobLogBroker(),
+                TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
+                null
+        );
+        AuditJob job = new AuditJob("surface1", "java");
+        job.workDir(tempDir.resolve("audit_surface1"));
+        Files.createDirectories(job.workDir());
+
+        var result = service.prepare(
+                job,
+                source,
+                List.of("http_output"),
+                List.of()
+        );
+
+        Path task = Path.of(result.manifest().get("http_output"));
+        assertThat(task).isRegularFile();
+        var taskJson = mapper.readTree(task.toFile());
+        assertThat(taskJson.path("candidate_count").asInt()).isZero();
+        assertThat(taskJson.path("endpoint_review_count").asInt()).isEqualTo(1);
+        assertThat(taskJson.path("endpoint_review_surface"))
+                .singleElement()
+                .satisfies(endpoint -> assertThat(endpoint.path("path").asText())
+                        .isEqualTo("/xss/reflect"));
+        Path endpointChunk = Path.of(taskJson.path("endpoint_review_chunks")
+                .get(0)
+                .asText());
+        assertThat(endpointChunk).isRegularFile();
+        assertThat(Files.readString(endpointChunk))
+                .contains("/xss/reflect");
+    }
+
+    @Test
+    void splitsLargeEndpointReviewSurfaceIntoBatches() throws Exception {
+        Path source = tempDir.resolve("large-surface-source");
+        Files.createDirectories(source);
+        List<String> methods = new ArrayList<>();
+        for (int index = 0; index < 36; index++) {
+            methods.add("""
+                    @GetMapping("/xss/reflect-%d")
+                    String reflect%d(@RequestParam String q) {
+                        return q;
+                    }
+                    """.formatted(index, index));
+        }
+        Files.writeString(source.resolve("XssController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class XssController {
+                %s
+                }
+                """.formatted(String.join("\n", methods)));
+
+        ObjectMapper mapper = new ObjectMapper();
+        EvidencePreparationService service = new EvidencePreparationServiceImpl(
+                new WhiteBoxAnalysisServiceImpl(List.of(new HttpEndpointScanner())),
+                mapper,
+                new JobLogBroker(),
+                TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
+                null
+        );
+        AuditJob job = new AuditJob("surface2", "java");
+        job.workDir(tempDir.resolve("audit_surface2"));
+        Files.createDirectories(job.workDir());
+
+        var result = service.prepare(
+                job,
+                source,
+                List.of("http_output"),
+                List.of()
+        );
+
+        assertThat(result.expandedCandidates())
+                .containsExactly("http_output_batch_1", "http_output_batch_2");
+        var first = mapper.readTree(
+                Path.of(result.manifest().get("http_output_batch_1")).toFile()
+        );
+        var second = mapper.readTree(
+                Path.of(result.manifest().get("http_output_batch_2")).toFile()
+        );
+        assertThat(first.path("endpoint_review_count").asInt()).isEqualTo(30);
+        assertThat(second.path("endpoint_review_count").asInt()).isEqualTo(6);
+        assertThat(first.path("endpoint_review_chunks")).hasSize(2);
+        assertThat(second.path("endpoint_review_chunks")).hasSize(1);
+    }
+
+    @Test
     void writesStoredCandidatePackageForSstiHunter() throws Exception {
         Path source = tempDir.resolve("stored-source");
         Files.createDirectories(source);

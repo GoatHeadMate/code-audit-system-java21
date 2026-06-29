@@ -739,11 +739,11 @@ function addLog(text, type = '') {
 function logColor(t, type) {
   if (type==='err') return 'text-red-600';
   if (type==='dim') return 'text-slate-300 text-center text-xs py-1';
-  if (t.startsWith('[subagent-return]'))
+  if (t.includes('[subagent-return]'))
     return 'log-subagent-return' + (t.includes(' FAILED ') ? ' failed' : '');
-  if (t.startsWith('[subagent-start]')) return 'log-subagent-start';
+  if (t.includes('[subagent-start]')) return 'log-subagent-start';
   if (t.includes('subagent(s) returned results')) return 'log-subagent-return';
-  if (t.startsWith('[supervisor]')) {
+  if (t.includes('[supervisor]')) {
     const completed = /\bcompleted\b|all\s+\d+\s+hunters?\s+completed/i.test(t);
     return 'log-supervisor' + (completed ? ' completed' : '');
   }
@@ -752,7 +752,7 @@ function logColor(t, type) {
 function colorize(t, type) {
   if (type==='err'||type==='dim') return esc(t);
   const returned = t.match(
-    /^\[subagent-return\]\s+(DONE|FAILED)\s+([^|]+?)\s+\|\s+progress\s+([^|]+?)\s+\|\s+result\s+(.+)$/
+    /\[subagent-return\]\s+(DONE|FAILED)\s+([^|]+?)\s+\|\s+progress\s+([^|]+?)\s+\|\s+result\s+(.+)$/
   );
   if (returned) {
     const statusClass = returned[1] === 'FAILED' ? 'text-red-600' : 'text-emerald-600';
@@ -762,7 +762,7 @@ function colorize(t, type) {
       + `<span class="text-slate-400 ml-3">进度 ${esc(returned[3].trim())}</span>`
       + `<span class="text-slate-400 ml-3">返回 ${esc(returned[4].trim())}</span>`;
   }
-  const started = t.match(/^\[subagent-start\]\s+START\s+([^:]+)(?::\s*(.*))?$/);
+  const started = t.match(/\[subagent-start\]\s+START\s+([^:]+)(?::\s*(.*))?$/);
   if (started) {
     return `<span class="text-indigo-600 font-bold">HUNTER STARTED</span>`
       + `<span class="text-slate-800 ml-2 font-medium">${esc(started[1].trim())}</span>`
@@ -771,18 +771,24 @@ function colorize(t, type) {
   if (t.includes('subagent(s) returned results'))
     return `<span class="text-emerald-600 font-bold">HUNTER COMPLETED</span>`
       + `<span class="text-slate-600 ml-2">${esc(t)}</span>`;
-  if (t.startsWith('[supervisor]')) {
-    const body = t.slice('[supervisor]'.length).trim();
+  if (t.includes('[supervisor]')) {
+    const idx = t.indexOf('[supervisor]');
+    const ts = t.substring(0, idx);
+    const body = t.slice(idx + '[supervisor]'.length).trim();
     const completed = /\bcompleted\b|all\s+\d+\s+hunters?\s+completed/i.test(body);
     const label = completed ? 'SUPERVISOR · COMPLETED' : 'SUPERVISOR';
     const labelClass = completed ? 'text-emerald-600' : 'text-indigo-600';
-    return `<span class="${labelClass} font-semibold">${label}</span>`
+    return `<span class="text-slate-400">${esc(ts)}</span><span class="${labelClass} font-semibold">${label}</span>`
       + `<span class="text-slate-700 ml-2">${esc(body)}</span>`;
   }
-  if (t.startsWith('[orchestrator]'))
-    return `<span class="text-purple-600 font-medium">[orchestrator]</span><span class="text-slate-600">${esc(t.slice(14))}</span>`;
-  const m = t.match(/^(\[[^\]]+\])([\s\S]*)/);
-  if (m) return `<span class="text-emerald-600 font-medium">${esc(m[1])}</span><span class="text-slate-600">${esc(m[2])}</span>`;
+  if (t.includes('[orchestrator]')) {
+    const idx = t.indexOf('[orchestrator]');
+    const ts = t.substring(0, idx);
+    const body = t.slice(idx + '[orchestrator]'.length);
+    return `<span class="text-slate-400">${esc(ts)}</span><span class="text-purple-600 font-medium">[orchestrator]</span><span class="text-slate-600">${esc(body)}</span>`;
+  }
+  const m = t.match(/^(\[\d{2}:\d{2}:\d{2}\]\s*)?(\[[^\]]+\])([\s\S]*)/);
+  if (m) return `<span class="text-slate-400">${esc(m[1]||'')}</span><span class="text-emerald-600 font-medium">${esc(m[2])}</span><span class="text-slate-600">${esc(m[3])}</span>`;
   if (/FATAL|ERROR/.test(t)) return `<span class="text-red-600">${esc(t)}</span>`;
   if (/WARN/.test(t))        return `<span class="text-amber-600">${esc(t)}</span>`;
   if (t.includes('done:'))   return `<span class="text-emerald-600">${esc(t)}</span>`;

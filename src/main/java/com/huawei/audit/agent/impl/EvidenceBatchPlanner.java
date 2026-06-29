@@ -10,6 +10,7 @@ final class EvidenceBatchPlanner {
     static List<ChunkBatch> partitionChunks(
             List<String> candidateChunks,
             List<String> storedChunks,
+            List<String> endpointChunks,
             int maxChunks
     ) {
         if (maxChunks <= 0) {
@@ -17,27 +18,32 @@ final class EvidenceBatchPlanner {
         }
         List<TaggedChunk> combined = new ArrayList<>(
                 candidateChunks.size() + storedChunks.size()
+                        + endpointChunks.size()
         );
         candidateChunks.forEach(path ->
-                combined.add(new TaggedChunk(path, true)));
+                combined.add(new TaggedChunk(path, ChunkKind.CANDIDATE)));
         storedChunks.forEach(path ->
-                combined.add(new TaggedChunk(path, false)));
+                combined.add(new TaggedChunk(path, ChunkKind.STORED)));
+        endpointChunks.forEach(path ->
+                combined.add(new TaggedChunk(path, ChunkKind.ENDPOINT)));
 
         List<ChunkBatch> batches = new ArrayList<>();
         for (int start = 0; start < combined.size(); start += maxChunks) {
             int end = Math.min(start + maxChunks, combined.size());
             List<String> candidateBatch = new ArrayList<>();
             List<String> storedBatch = new ArrayList<>();
+            List<String> endpointBatch = new ArrayList<>();
             for (TaggedChunk chunk : combined.subList(start, end)) {
-                if (chunk.candidate()) {
-                    candidateBatch.add(chunk.path());
-                } else {
-                    storedBatch.add(chunk.path());
+                switch (chunk.kind()) {
+                    case CANDIDATE -> candidateBatch.add(chunk.path());
+                    case STORED -> storedBatch.add(chunk.path());
+                    case ENDPOINT -> endpointBatch.add(chunk.path());
                 }
             }
             batches.add(new ChunkBatch(
                     List.copyOf(candidateBatch),
-                    List.copyOf(storedBatch)
+                    List.copyOf(storedBatch),
+                    List.copyOf(endpointBatch)
             ));
         }
         return List.copyOf(batches);
@@ -60,8 +66,15 @@ final class EvidenceBatchPlanner {
 
     record ChunkBatch(
             List<String> candidateChunks,
-            List<String> storedChunks
+            List<String> storedChunks,
+            List<String> endpointChunks
     ) { }
 
-    private record TaggedChunk(String path, boolean candidate) { }
+    private enum ChunkKind {
+        CANDIDATE,
+        STORED,
+        ENDPOINT
+    }
+
+    private record TaggedChunk(String path, ChunkKind kind) { }
 }

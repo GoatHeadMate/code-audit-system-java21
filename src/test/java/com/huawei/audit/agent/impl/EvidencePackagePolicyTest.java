@@ -90,4 +90,55 @@ class EvidencePackagePolicyTest {
                     .isEqualTo(List.of("COMMAND_EXECUTION"));
         });
     }
+
+    @Test
+    void buildsEndpointReviewSurfaceForKeywordMatchedHunterCategories() {
+        EntryPoint xss = entryPoint("xss-1", "/xss/reflect",
+                "XssController", "reflect");
+        EntryPoint xxe = entryPoint("xxe-1", "/xxe/dom4j",
+                "XxeController", "dom4j");
+        EntryPoint index = entryPoint("index-1", "/index",
+                "IndexController", "index");
+
+        assertThat(EvidencePackagePolicy.endpointReviewSurface(
+                "http_output",
+                List.of(xss, xxe, index),
+                List.of()
+        )).singleElement().satisfies(surface -> {
+            assertThat(surface)
+                    .containsEntry("path", "/xss/reflect")
+                    .containsEntry("discovery_source", "keyword-surface");
+        });
+
+        assertThat(EvidencePackagePolicy.endpointReviewSurface(
+                "unsafe_parsing",
+                List.of(xss, xxe, index),
+                List.of()
+        )).singleElement().satisfies(surface ->
+                assertThat(surface).containsEntry("path", "/xxe/dom4j"));
+    }
+
+    private EntryPoint entryPoint(
+            String id,
+            String path,
+            String className,
+            String methodName
+    ) {
+        return new EntryPoint(
+                id,
+                "HTTP",
+                List.of("GET"),
+                path,
+                className,
+                methodName,
+                className + ".java",
+                10,
+                "spring-mvc",
+                List.of(),
+                "annotation",
+                "HIGH",
+                className + "#" + methodName + "/0",
+                "BOUND"
+        );
+    }
 }

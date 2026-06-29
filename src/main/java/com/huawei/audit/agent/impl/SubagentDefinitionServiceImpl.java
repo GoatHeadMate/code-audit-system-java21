@@ -70,6 +70,25 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
                 ---
 
                 %s
+
+                ## Endpoint Review Surface
+
+                Some task files include `endpoint_review_count`,
+                `endpoint_review_chunks`, and `endpoint_review_surface`.
+                Treat these endpoints as first-class review items, not as
+                optional context. Read every endpoint-review chunk when
+                `endpoint_review_count` is greater than zero.
+
+                For each endpoint-review item:
+
+                - Read the referenced controller method and nearby helper code.
+                - Decide whether the endpoint is vulnerable, a safe/sec example,
+                  or not applicable for this hunter.
+                - Report CONFIRM only with source-line evidence and the missing
+                  or bypassed protection.
+                - Suppress safe/sec examples instead of returning them as
+                  findings.
+                - Include `endpoint_reviewed` in your JSON response.
                 """.formatted(
                 skillName,
                 indentYamlBlock(description),

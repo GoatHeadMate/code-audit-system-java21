@@ -18,11 +18,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 public class AgentScopeGateway implements ClaudeGateway {
+    private static final Logger LOGGER = LoggerFactory.getLogger(
+            AgentScopeGateway.class
+    );
     private static final String USER_ID = "code-audit";
+    private static final int MAX_RETRIES = 2;
+    private static final long RETRY_BASE_DELAY_MS = 30_000L;
     static final String AUDIT_SKILL_SOURCE = "audit";
 
     private final AgentScopeProperties properties;
@@ -58,6 +65,33 @@ public class AgentScopeGateway implements ClaudeGateway {
             Map<String, AgentDef> agents,
             Consumer<String> eventConsumer
     ) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                String result = doSupervise(
+                        workingDirectory, prompt, agents, eventConsumer
+                );
+                if (isOverloadedResponse(result) && attempt <= MAX_RETRIES) {
+                    retryWait(attempt, eventConsumer);
+                    continue;
+                }
+                return result;
+            } catch (Exception exception) {
+                if (attempt > MAX_RETRIES || !isRetryable(exception)) {
+                    throw exception instanceof RuntimeException re
+                            ? re
+                            : new RuntimeException(exception);
+                }
+                retryWait(attempt, eventConsumer);
+            }
+        }
+    }
+
+    private String doSupervise(
+            Path workingDirectory,
+            String prompt,
+            Map<String, AgentDef> agents,
+            Consumer<String> eventConsumer
+    ) {
         List<SubagentDeclaration> declarations = buildSubagents(agents);
         AgentScopeEventCollector events = new AgentScopeEventCollector(
                 eventConsumer
@@ -66,7 +100,7 @@ public class AgentScopeGateway implements ClaudeGateway {
         try (HarnessAgent agent = baseBuilder(workingDirectory, declarations)
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
-                .sysPrompt(supervisorPrompt(sourceRoot, declarations))
+                .sysPrompt("You are a white-box security audit supervisor. Follow the user prompt exactly.")
                 .skillRepository(new FileSystemSkillRepository(
                         skillsDirectory(workingDirectory),
                         false,
@@ -94,6 +128,40 @@ public class AgentScopeGateway implements ClaudeGateway {
             );
         }
         return result;
+    }
+
+    private boolean isRetryable(Exception exception) {
+        for (Throwable t = exception; t != null; t = t.getCause()) {
+            String msg = t.getMessage();
+            if (msg != null && (msg.contains("overloaded")
+                    || msg.contains("rate_limit")
+                    || msg.contains("过大")
+                    || msg.contains("529"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isOverloadedResponse(String result) {
+        return result.contains("overloaded_error")
+                || result.contains("rate_limit_error");
+    }
+
+    private void retryWait(int attempt, Consumer<String> eventConsumer) {
+        long delay = RETRY_BASE_DELAY_MS * attempt;
+        eventConsumer.accept(
+                "[supervisor] API 过载，" + (delay / 1000)
+                        + "s 后重试 (第 " + (attempt + 1) + " 次)"
+        );
+        LOGGER.warn("API overloaded, retrying in {}s (attempt {}/{})",
+                delay / 1000, attempt + 1, MAX_RETRIES + 1);
+        try {
+            Thread.sleep(delay);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Retry interrupted", interrupted);
+        }
     }
 
     @Override
@@ -204,39 +272,6 @@ public class AgentScopeGateway implements ClaudeGateway {
         int subagentCount = declarations == null ? 0 : declarations.size();
         int multiplier = Math.max(1, Math.min(subagentCount, 8));
         return properties.timeout().multipliedBy(multiplier);
-    }
-
-    private String supervisorPrompt(
-            Path sourceRoot,
-            List<SubagentDeclaration> declarations
-    ) {
-        String subagentNames = declarations.stream()
-                .map(SubagentDeclaration::getName)
-                .reduce((left, right) -> left + ", " + right)
-                .orElse("(none)");
-        return """
-                You are the Java AgentScope supervisor for a white-box security audit.
-                Work autonomously. Your first action must be agent_spawn tool calls
-                that delegate evidence packages to registered hunter subagents.
-                Issue ALL agent_spawn calls together in your first turn so
-                hunters run in parallel.
-                Do NOT use file-reading, file-writing, or skill-loading tools
-                yourself. Memory tools are disabled. Delegate all source review
-                to hunter subagents via agent_spawn.
-                Do not use background, async, fire-and-forget, or timeout_seconds=0
-                subagent calls. Every agent_spawn call must wait for a returned result with a
-                non-zero timeout before you continue.
-                Never finish immediately after scheduling hunters. Read every
-                selected subagent result, then synthesize the final answer.
-                Source root: %s
-                Available hunter subagents: %s
-                The final assistant message must be exactly one JSON object with fields:
-                selected_hunters, rationale, findings.
-                Do not include prose outside that final JSON object.
-                """.formatted(
-                sourceRoot.toAbsolutePath().normalize(),
-                subagentNames
-        );
     }
 
 }

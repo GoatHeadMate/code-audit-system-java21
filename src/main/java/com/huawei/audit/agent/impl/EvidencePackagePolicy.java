@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -110,46 +111,122 @@ final class EvidencePackagePolicy {
                     entryPoint.id(),
                     List.of()
             );
-            List<String> sinkCategories = reachable.stream()
-                    .map(candidate -> candidate.sink().category())
-                    .distinct()
-                    .sorted()
-                    .toList();
-            int minimumCallDepth = reachable.stream()
-                    .mapToInt(CandidatePath::callDepth)
-                    .min()
-                    .orElse(-1);
-
-            Map<String, Object> summary = new LinkedHashMap<>();
-            summary.put("entrypoint_id", entryPoint.id());
-            summary.put("protocol", entryPoint.protocol());
-            summary.put("http_methods", entryPoint.httpMethods());
-            summary.put("path", entryPoint.path());
-            summary.put("class_name", entryPoint.className());
-            summary.put("method_name", entryPoint.methodName());
-            summary.put("file_path", entryPoint.filePath());
-            summary.put("start_line", entryPoint.startLine());
-            summary.put("framework", entryPoint.framework());
-            summary.put(
-                    "security_annotations",
-                    entryPoint.securityAnnotations()
+            Map<String, Object> summary = endpointSummary(
+                    entryPoint,
+                    reachable,
+                    "authorization-surface"
             );
-            summary.put(
-                    "method_security_present",
-                    !entryPoint.securityAnnotations().isEmpty()
-            );
-            summary.put("binding_status", entryPoint.bindingStatus());
-            summary.put("reachable_sink_categories", sinkCategories);
-            summary.put("candidate_path_count", reachable.size());
-            summary.put("minimum_call_depth", minimumCallDepth);
             result.add(Map.copyOf(summary));
         }
         return List.copyOf(result);
     }
 
+    static List<Map<String, Object>> endpointReviewSurface(
+            String hunter,
+            List<EntryPoint> entryPoints,
+            List<CandidatePath> candidates
+    ) {
+        Set<String> keywords = endpointKeywords(hunter);
+        if (keywords.isEmpty()) {
+            return List.of();
+        }
+        Map<String, List<CandidatePath>> candidatesByEntry = candidates.stream()
+                .filter(candidate -> candidate.entryPoint() != null)
+                .collect(Collectors.groupingBy(
+                        candidate -> candidate.entryPoint().id()
+                ));
+        return entryPoints.stream()
+                .filter(entryPoint -> isAuthorizationProtocol(entryPoint.protocol()))
+                .filter(entryPoint -> containsAny(entryPoint, keywords))
+                .map(entryPoint -> endpointSummary(
+                        entryPoint,
+                        candidatesByEntry.getOrDefault(entryPoint.id(), List.of()),
+                        "keyword-surface"
+                ))
+                .toList();
+    }
+
+    private static Map<String, Object> endpointSummary(
+            EntryPoint entryPoint,
+            List<CandidatePath> reachable,
+            String discoverySource
+    ) {
+        List<String> sinkCategories = reachable.stream()
+                .map(candidate -> candidate.sink().category())
+                .distinct()
+                .sorted()
+                .toList();
+        int minimumCallDepth = reachable.stream()
+                .mapToInt(CandidatePath::callDepth)
+                .min()
+                .orElse(-1);
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("entrypoint_id", entryPoint.id());
+        summary.put("protocol", entryPoint.protocol());
+        summary.put("http_methods", entryPoint.httpMethods());
+        summary.put("path", entryPoint.path());
+        summary.put("class_name", entryPoint.className());
+        summary.put("method_name", entryPoint.methodName());
+        summary.put("file_path", entryPoint.filePath());
+        summary.put("start_line", entryPoint.startLine());
+        summary.put("framework", entryPoint.framework());
+        summary.put("security_annotations", entryPoint.securityAnnotations());
+        summary.put("method_security_present",
+                !entryPoint.securityAnnotations().isEmpty());
+        summary.put("binding_status", entryPoint.bindingStatus());
+        summary.put("reachable_sink_categories", sinkCategories);
+        summary.put("candidate_path_count", reachable.size());
+        summary.put("minimum_call_depth", minimumCallDepth);
+        summary.put("discovery_source", discoverySource);
+        return Map.copyOf(summary);
+    }
+
     private static boolean isAuthorizationProtocol(String protocol) {
         return "HTTP".equalsIgnoreCase(protocol)
                 || "WEBSOCKET".equalsIgnoreCase(protocol);
+    }
+
+    private static Set<String> endpointKeywords(String hunter) {
+        return switch (hunter) {
+            case "code_execution" -> Set.of(
+                    "rce", "cmd", "command", "exec", "process", "runtime",
+                    "spel", "ognl", "qlexpress", "expression", "classloader"
+            );
+            case "ssrf" -> Set.of(
+                    "ssrf", "url", "proxy", "fetch", "httpclient", "okhttp",
+                    "urlconnection", "resttemplate", "webclient"
+            );
+            case "file_operations" -> Set.of(
+                    "file", "upload", "download", "path", "traversal",
+                    "directory", "zip", "read", "write"
+            );
+            case "http_output" -> Set.of(
+                    "xss", "jsonp", "cors", "redirect", "crlf", "header",
+                    "cookie", "response"
+            );
+            case "unsafe_parsing" -> Set.of(
+                    "xxe", "xml", "sax", "dom4j", "jdom", "poi", "xlsx",
+                    "deserialize", "deserialization", "unserialize",
+                    "fastjson", "xstream", "yaml", "spel", "ssti",
+                    "velocity", "qlexpress", "expression", "classloader"
+            );
+            case "component_vulns" -> Set.of(
+                    "log4j", "jndi", "actuator", "druid", "swagger",
+                    "shiro", "fastjson", "xstream"
+            );
+            default -> Set.of();
+        };
+    }
+
+    private static boolean containsAny(EntryPoint entryPoint, Set<String> keywords) {
+        String haystack = String.join(" ",
+                entryPoint.path(),
+                entryPoint.className(),
+                entryPoint.methodName(),
+                entryPoint.filePath()
+        ).toLowerCase(Locale.ROOT);
+        return keywords.stream().anyMatch(haystack::contains);
     }
 
     private static Comparator<CandidatePath> candidatePriority() {

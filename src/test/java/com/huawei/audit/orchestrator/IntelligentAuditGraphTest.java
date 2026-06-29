@@ -59,7 +59,7 @@ class IntelligentAuditGraphTest {
                 new JobLogBroker()
         );
 
-        OrchestratorAgentState result = graph.invoke(
+        IntelligentAuditGraph.AuditResult result = graph.invoke(
                 job,
                 Path.of("source"),
                 Map.of("primary_language", "java"),

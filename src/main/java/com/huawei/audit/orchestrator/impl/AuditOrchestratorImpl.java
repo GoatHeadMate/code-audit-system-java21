@@ -9,7 +9,6 @@ import com.huawei.audit.hunter.HunterScheduler;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.orchestrator.AuditOrchestrator;
 import com.huawei.audit.orchestrator.IntelligentAuditGraph;
-import com.huawei.audit.orchestrator.OrchestratorAgentState;
 import com.huawei.audit.orchestrator.TechProfileScanner;
 import com.huawei.audit.source.SourceWorkspaceService;
 import java.nio.file.Files;
@@ -75,22 +74,14 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
             );
 
             List<String> candidates = scheduler.schedule(techProfile);
-            logs.publish(
-                    job,
-                    "[langgraph4j] candidate hunters: " + String.join(", ", candidates)
-            );
-            logs.publish(
-                    job,
-                    "[langchain4j] intelligent orchestrator "
-                            + (intelligentOrchestratorEnabled ? "enabled" : "disabled")
-            );
+            logs.publish(job,
+                    "[orchestrator] candidate hunters: " + String.join(", ", candidates));
+            logs.publish(job,
+                    "[orchestrator] intelligent selection "
+                            + (intelligentOrchestratorEnabled ? "enabled" : "disabled"));
 
-            OrchestratorAgentState result = intelligentGraph.invoke(
-                    job,
-                    source.sourceRoot(),
-                    techProfile,
-                    candidates
-            );
+            IntelligentAuditGraph.AuditResult result = intelligentGraph.invoke(
+                    job, source.sourceRoot(), techProfile, candidates);
             job.findings(result.finalFindings());
             job.stats(result.stats());
             job.taskSummary(result.taskSummary());

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -13,11 +14,13 @@ import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
 import com.huawei.audit.job.JobLogBroker;
-import dev.langchain4j.data.message.ChatMessage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.mockito.ArgumentCaptor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,26 +33,36 @@ class SupervisorAgentTest {
     @Test
     void filtersDelegationToCandidateWhitelistAndMandatoryHunters()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
-                {
-                  "selected_hunters": ["ssrf", "not-a-real-agent"],
-                  "rationale": "Spring HTTP client surface",
-                  "findings": [{
-                    "rule_id": "ssrf-1",
-                    "severity": "HIGH",
-                    "confidence": 0.9,
-                    "file_path": "src/Test.java",
-                    "start_line": 12,
-                    "message": "User-controlled URL",
-                    "vuln_type": "SSRF"
-                  }]
-                }
-                """);
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    if ("ssrf".equals(hunter)) {
+                        return """
+                                {
+                                  "selected_hunters": ["ssrf", "not-a-real-agent"],
+                                  "rationale": "Spring HTTP client surface",
+                                  "findings": [{
+                                    "rule_id": "ssrf-1",
+                                    "severity": "HIGH",
+                                    "confidence": 0.9,
+                                    "file_path": "src/Test.java",
+                                    "start_line": 12,
+                                    "message": "User-controlled URL",
+                                    "vuln_type": "SSRF"
+                                  }]
+                                }
+                                """;
+                    }
+                    return """
+                            {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                            """.formatted(hunter);
+                });
 
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -100,8 +113,8 @@ class SupervisorAgentTest {
     @Test
     void parsesFencedEnvelopeAfterTextContainingTemplateBraces()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
                 All subagent audits completed.
                 SQL Injection: `${orderByClause}` requires review.
 
@@ -127,7 +140,7 @@ class SupervisorAgentTest {
 
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -167,14 +180,14 @@ class SupervisorAgentTest {
     @Test
     void rejectsPlanningTextInsteadOfReturningEmptyFindings()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any(), any())).thenReturn(
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn(
                 "I'll start by examining the project structure, then delegate."
         );
 
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -199,11 +212,12 @@ class SupervisorAgentTest {
                 Map.of()
         ))
                 .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("all AgentScope hunter sessions failed")
                 .hasMessageContaining("supervisor response unparseable")
                 .hasMessageContaining("supervisor did not return a JSON object")
                 .hasMessageContaining("I'll start by examining");
 
-        assertThat(job.workDir().resolve("supervisor-response.txt"))
+        assertThat(job.workDir().resolve("supervisor-response-code_execution.txt"))
                 .isRegularFile();
     }
 
@@ -211,14 +225,14 @@ class SupervisorAgentTest {
     @SuppressWarnings("unchecked")
     void subagentLoadsSkillThroughAgentScopeToolInsteadOfInliningSkill()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
                 {"selected_hunters":["sql_injection"],"rationale":"ok","findings":[]}
                 """);
 
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -245,7 +259,7 @@ class SupervisorAgentTest {
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
                 ArgumentCaptor.forClass(Map.class);
-        verify(model).supervise(any(), any(), any(), agentsCaptor.capture(), any());
+        verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
         ClaudeGateway.AgentDef agent = agentsCaptor.getValue().get("sql_injection");
 
         assertThat(agent.skills()).containsExactly("audit-sql-injection_audit");
@@ -266,14 +280,14 @@ class SupervisorAgentTest {
     @SuppressWarnings("unchecked")
     void skipsEvidencePackagesWithoutCandidateReviewWork()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
                 {"selected_hunters":["code_execution"],"rationale":"ok","findings":[]}
                 """);
 
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -304,7 +318,7 @@ class SupervisorAgentTest {
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
                 ArgumentCaptor.forClass(Map.class);
-        verify(model).supervise(any(), any(), any(), agentsCaptor.capture(), any());
+        verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
 
         assertThat(agentsCaptor.getValue())
                 .containsOnlyKeys("code_execution");
@@ -312,16 +326,28 @@ class SupervisorAgentTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void promptsSupervisorToSpawnHuntersInParallel()
+    void runsEachHunterInSeparateVirtualThreadSupervisorSession()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
-        when(model.supervise(any(), any(), any(), any(), any())).thenReturn("""
-                {"selected_hunters":["code_execution","authorization"],"rationale":"ok","findings":[]}
-                """);
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        CountDownLatch bothSessionsStarted = new CountDownLatch(2);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    bothSessionsStarted.countDown();
+                    if (!bothSessionsStarted.await(2, TimeUnit.SECONDS)) {
+                        throw new AssertionError(
+                                "hunter supervisor sessions did not run concurrently"
+                        );
+                    }
+                    return """
+                            {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                            """.formatted(hunter);
+                });
 
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -349,26 +375,94 @@ class SupervisorAgentTest {
                 Map.of()
         );
 
-        ArgumentCaptor<List<ChatMessage>> messagesCaptor =
-                ArgumentCaptor.forClass(List.class);
-        verify(model).supervise(any(), any(), messagesCaptor.capture(), any(), any());
-        String prompt = messagesCaptor.getValue().toString();
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
+                ArgumentCaptor.forClass(Map.class);
+        verify(gateway, times(2)).supervise(
+                any(),
+                any(),
+                promptCaptor.capture(),
+                agentsCaptor.capture(),
+                any()
+        );
 
-        assertThat(prompt)
-                .contains("ALL agent_spawn calls together")
-                .contains("in parallel")
-                .contains("Maximum agent_spawn calls per assistant turn: 2")
-                .doesNotContain("serially")
-                .doesNotContain("one at a time");
+        assertThat(agentsCaptor.getAllValues())
+                .allSatisfy(singleAgent -> assertThat(singleAgent).hasSize(1));
+        assertThat(agentsCaptor.getAllValues().stream()
+                .flatMap(singleAgent -> singleAgent.keySet().stream())
+                .toList())
+                .containsExactlyInAnyOrder("code_execution", "authorization");
+        assertThat(promptCaptor.getAllValues())
+                .allSatisfy(prompt -> assertThat(prompt)
+                        .contains("EXACTLY ONE agent_spawn call in this session")
+                        .contains("Maximum agent_spawn calls per assistant turn: 1")
+                        .doesNotContain("in parallel"));
+    }
+
+    @Test
+    void limitsConcurrentHunterSupervisorSessions()
+            throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        AtomicInteger active = new AtomicInteger();
+        AtomicInteger maxObserved = new AtomicInteger();
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    int current = active.incrementAndGet();
+                    maxObserved.accumulateAndGet(current, Math::max);
+                    try {
+                        Thread.sleep(100);
+                        Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
+                        String hunter = agents.keySet().iterator().next();
+                        return """
+                                {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                                """.formatted(hunter);
+                    } finally {
+                        active.decrementAndGet();
+                    }
+                });
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5,
+                        80
+                ),
+                new JobLogBroker()
+        );
+        AuditJob job = new AuditJob("limited123", "java");
+        job.workDir(tempDir.resolve("audit_limited123"));
+        Files.createDirectories(job.workDir());
+
+        supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("code_execution", "authorization", "ssrf"),
+                Map.of(
+                        "code_execution", taskFile("code_execution", 1).toString(),
+                        "authorization", authorizationTaskFile().toString(),
+                        "ssrf", taskFile("ssrf", 1).toString()
+                ),
+                Map.of(),
+                Map.of()
+        );
+
+        verify(gateway, times(3)).supervise(any(), any(), any(), any(), any());
+        assertThat(maxObserved.get()).isLessThanOrEqualTo(2);
     }
 
     @Test
     void skipsAgentScopeWhenNoEvidencePackageHasReviewWork()
             throws Exception {
-        ClaudeAgentSupervisorModel model = mock(ClaudeAgentSupervisorModel.class);
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
-                model,
+                gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
                 new OrchestratorProperties(
@@ -396,11 +490,98 @@ class SupervisorAgentTest {
                 Map.of()
         );
 
-        verify(model, never()).supervise(any(), any(), any(), any(), any());
+        verify(gateway, never()).supervise(any(), any(), any(), any(), any());
         assertThat(result.selectedHunters()).isEmpty();
         assertThat(result.findings()).isEmpty();
         assertThat(job.workDir().resolve("supervisor-response.txt"))
                 .isRegularFile();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void keepsEndpointReviewSurfaceWithoutCandidatePaths()
+            throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
+                {"selected_hunters":["http_output"],"rationale":"surface","findings":[]}
+                """);
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5,
+                        80
+                ),
+                new JobLogBroker()
+        );
+        AuditJob job = new AuditJob("surface123", "java");
+        job.workDir(tempDir.resolve("audit_surface123"));
+        Files.createDirectories(job.workDir());
+
+        var result = supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("http_output"),
+                Map.of("http_output", endpointSurfaceTask("http_output").toString()),
+                Map.of(),
+                Map.of()
+        );
+
+        ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
+                ArgumentCaptor.forClass(Map.class);
+        verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
+
+        assertThat(agentsCaptor.getValue()).containsOnlyKeys("http_output");
+        assertThat(result.selectedHunters()).containsExactly("http_output");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void keepsEndpointReviewChunkOnlyBatchWithoutInlineSurface()
+            throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
+                {"selected_hunters":["http_output_batch_2"],"rationale":"surface batch","findings":[]}
+                """);
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5,
+                        80
+                ),
+                new JobLogBroker()
+        );
+        AuditJob job = new AuditJob("surfacebatch123", "java");
+        job.workDir(tempDir.resolve("audit_surfacebatch123"));
+        Files.createDirectories(job.workDir());
+
+        var result = supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("http_output_batch_2"),
+                Map.of("http_output_batch_2",
+                        endpointChunkOnlyTask("http_output").toString()),
+                Map.of(),
+                Map.of()
+        );
+
+        ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
+                ArgumentCaptor.forClass(Map.class);
+        verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
+
+        assertThat(agentsCaptor.getValue()).containsOnlyKeys("http_output_batch_2");
+        assertThat(result.selectedHunters()).containsExactly("http_output_batch_2");
     }
 
     private Path taskFile(String hunter, int candidateCount) throws Exception {
@@ -425,6 +606,41 @@ class SupervisorAgentTest {
                   "authorization_surface":[{"path":"/execute/cmd"}]
                 }
                 """);
+        return task;
+    }
+
+    private Path endpointSurfaceTask(String hunter) throws Exception {
+        Path tasks = tempDir.resolve("tasks");
+        Files.createDirectories(tasks);
+        Path task = tasks.resolve(hunter + "-surface.json");
+        Files.writeString(task, """
+                {
+                  "hunter":"%s",
+                  "candidate_count":0,
+                  "stored_candidate_count":0,
+                  "endpoint_review_surface":[{"path":"/xss/reflect"}]
+                }
+                """.formatted(hunter));
+        return task;
+    }
+
+    private Path endpointChunkOnlyTask(String hunter) throws Exception {
+        Path tasks = tempDir.resolve("tasks");
+        Files.createDirectories(tasks);
+        Path chunk = tasks.resolve(hunter + "-endpoint-review-0001.json");
+        Files.writeString(chunk, """
+                {"start_index":0,"end_index":0,"items":[{"path":"/xss/reflect"}]}
+                """);
+        Path task = tasks.resolve(hunter + "-chunk-only.json");
+        Files.writeString(task, """
+                {
+                  "hunter":"%s",
+                  "candidate_count":0,
+                  "stored_candidate_count":0,
+                  "endpoint_review_count":1,
+                  "endpoint_review_chunks":["%s"]
+                }
+                """.formatted(hunter, chunk.toAbsolutePath().normalize()));
         return task;
     }
 }

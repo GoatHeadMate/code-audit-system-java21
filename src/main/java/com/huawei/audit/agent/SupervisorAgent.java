@@ -6,8 +6,6 @@ import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
 import com.huawei.audit.job.JobLogBroker;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.UserMessage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +14,11 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -36,26 +39,28 @@ public class SupervisorAgent {
     );
     private static final List<String> REVIEW_ARRAY_FIELDS = List.of(
             "authorization_surface",
+            "endpoint_review_surface",
             "unresolved_entrypoints",
             "dependency_candidates",
             "component_candidates",
             "vulnerable_dependencies"
     );
+    private static final int MAX_PARALLEL_HUNTER_SESSIONS = 2;
 
-    private final ClaudeAgentSupervisorModel model;
+    private final ClaudeGateway gateway;
     private final ObjectMapper objectMapper;
     private final FindingParser findingParser;
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
 
     public SupervisorAgent(
-            ClaudeAgentSupervisorModel model,
+            ClaudeGateway gateway,
             ObjectMapper objectMapper,
             FindingParser findingParser,
             OrchestratorProperties properties,
             JobLogBroker logs
     ) {
-        this.model = model;
+        this.gateway = gateway;
         this.objectMapper = objectMapper;
         this.findingParser = findingParser;
         this.properties = properties;
@@ -74,10 +79,9 @@ public class SupervisorAgent {
         Map<String, ClaudeGateway.AgentDef> agents = buildAgentDefs(
                 job.workDir(), sourceRoot, candidates, evidenceManifest, skillManifest
         );
-        List<String> activeCandidates = new ArrayList<>(agents.keySet());
         logs.publish(
                 job,
-                "[supervisor-agent] starting one AgentScope Java supervisor"
+                "[supervisor-agent] starting AgentScope Java hunter sessions"
                         + " with " + agents.size() + " pre-defined agents: "
                         + String.join(", ", agents.keySet())
         );
@@ -99,52 +103,200 @@ public class SupervisorAgent {
                     List.of()
             );
         }
-        String response = model.supervise(
-                job.workDir(),
+        SupervisorEnvelope envelope = superviseHunters(
+                job,
                 sourceRoot,
-                List.of(
-                        SystemMessage.from(systemPrompt()),
-                        UserMessage.from(userPrompt(
-                                sourceRoot,
-                                techProfile,
-                                activeCandidates,
-                                analysisSummary
-                        ))
-                ),
-                agents,
-                line -> logs.publish(job, line)
+                techProfile,
+                analysisSummary,
+                agents
         );
+        String response = responseJson(envelope);
         Files.writeString(
                 job.workDir().resolve("supervisor-response.txt"),
                 response
         );
+        logs.publish(
+                job,
+                "[supervisor-agent] completed; delegated="
+                        + String.join(", ", envelope.selectedHunters())
+                        + ", findings=" + envelope.findings().size()
+        );
+        return new SupervisorResult(
+                envelope.selectedHunters(),
+                envelope.rationale(),
+                envelope.findings()
+        );
+    }
+
+    private SupervisorEnvelope superviseHunters(
+            AuditJob job,
+            Path sourceRoot,
+            Map<String, Object> techProfile,
+            Map<String, Object> analysisSummary,
+            Map<String, ClaudeGateway.AgentDef> agents
+    ) throws Exception {
+        LinkedHashSet<String> selectedHunters = new LinkedHashSet<>();
+        List<String> rationaleParts = new ArrayList<>();
+        List<Map<String, Object>> findings = new ArrayList<>();
+        List<String> failures = new ArrayList<>();
+        List<Future<HunterSessionResult>> futures = new ArrayList<>();
+        Semaphore sessionSlots = new Semaphore(MAX_PARALLEL_HUNTER_SESSIONS);
+
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (Map.Entry<String, ClaudeGateway.AgentDef> entry : agents.entrySet()) {
+                futures.add(executor.submit(() -> superviseHunter(
+                        job,
+                        sourceRoot,
+                        techProfile,
+                        analysisSummary,
+                        entry.getKey(),
+                        entry.getValue(),
+                        sessionSlots
+                )));
+            }
+
+            for (Future<HunterSessionResult> future : futures) {
+                HunterSessionResult result = await(future);
+                if (result.failure() != null) {
+                    failures.add(result.hunter() + ": " + result.failure());
+                    rationaleParts.add(
+                            result.hunter() + ": failed - " + result.failure()
+                    );
+                    continue;
+                }
+                SupervisorEnvelope envelope = result.envelope();
+                selectedHunters.add(result.hunter());
+                selectedHunters.addAll(envelope.selectedHunters());
+                rationaleParts.add(result.hunter() + ": " + envelope.rationale());
+                findings.addAll(envelope.findings());
+            }
+        }
+
+        if (selectedHunters.isEmpty() && !failures.isEmpty()) {
+            throw new IllegalStateException(
+                    "all AgentScope hunter sessions failed: "
+                            + String.join("; ", failures)
+            );
+        }
+        return new SupervisorEnvelope(
+                List.copyOf(selectedHunters),
+                String.join(" | ", rationaleParts),
+                findings
+        );
+    }
+
+    private HunterSessionResult superviseHunter(
+            AuditJob job,
+            Path sourceRoot,
+            Map<String, Object> techProfile,
+            Map<String, Object> analysisSummary,
+            String hunter,
+            ClaudeGateway.AgentDef agentDef,
+            Semaphore sessionSlots
+    ) throws Exception {
+        Map<String, ClaudeGateway.AgentDef> singleAgent = new LinkedHashMap<>();
+        singleAgent.put(hunter, agentDef);
+        String prompt = systemPrompt() + "\n\n"
+                + userPrompt(sourceRoot, techProfile, List.of(hunter), analysisSummary);
+        boolean slotAcquired = false;
         try {
-            SupervisorEnvelope envelope = parseEnvelope(response, activeCandidates);
+            sessionSlots.acquire();
+            slotAcquired = true;
             logs.publish(
                     job,
-                    "[supervisor-agent] completed; delegated="
-                            + String.join(", ", envelope.selectedHunters())
-                            + ", findings=" + envelope.findings().size()
+                    "[supervisor-agent] hunter " + hunter
+                            + " acquired model slot (max_parallel="
+                            + MAX_PARALLEL_HUNTER_SESSIONS + ")"
             );
-            return new SupervisorResult(
-                    envelope.selectedHunters(),
-                    envelope.rationale(),
-                    envelope.findings()
+            String response = gateway.supervise(
+                    job.workDir(),
+                    sourceRoot,
+                    prompt,
+                    singleAgent,
+                    line -> logs.publish(job, line)
             );
+            Files.writeString(
+                    job.workDir().resolve(
+                            "supervisor-response-" + safeFileName(hunter) + ".txt"
+                    ),
+                    response
+            );
+            SupervisorEnvelope envelope = parseEnvelopeWithPreview(
+                    response,
+                    List.of(hunter)
+            );
+            logs.publish(
+                    job,
+                    "[supervisor-agent] hunter " + hunter
+                            + " completed; findings=" + envelope.findings().size()
+            );
+            return new HunterSessionResult(hunter, envelope, null);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return new HunterSessionResult(
+                    hunter,
+                    null,
+                    "interrupted while waiting for model slot"
+            );
+        } catch (Exception exception) {
+            logs.publish(
+                    job,
+                    "[supervisor-agent] hunter " + hunter
+                            + " failed: " + exception.getMessage()
+            );
+            return new HunterSessionResult(hunter, null, exception.getMessage());
+        } finally {
+            if (slotAcquired) {
+                sessionSlots.release();
+            }
+        }
+    }
+
+    private HunterSessionResult await(Future<HunterSessionResult> future) {
+        try {
+            return future.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(
+                    "interrupted while waiting for AgentScope hunter session",
+                    interrupted
+            );
+        } catch (ExecutionException executionException) {
+            throw new IllegalStateException(
+                    "AgentScope hunter session crashed",
+                    executionException.getCause()
+            );
+        }
+    }
+
+    private String responseJson(SupervisorEnvelope envelope) throws Exception {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("selected_hunters", envelope.selectedHunters());
+        response.put("rationale", envelope.rationale());
+        response.put("findings", envelope.findings());
+        return objectMapper.writeValueAsString(response);
+    }
+
+    private SupervisorEnvelope parseEnvelopeWithPreview(
+            String response,
+            List<String> activeCandidates
+    ) throws Exception {
+        try {
+            return parseEnvelope(response, activeCandidates);
         } catch (Exception parseException) {
             String preview = response == null ? "null"
                     : response.strip().substring(0, Math.min(200, response.strip().length()));
-            String message = "supervisor response unparseable: "
-                    + parseException.getMessage()
-                    + " | response preview: " + preview;
-            logs.publish(
-                    job,
-                    "[supervisor-agent] failed to parse supervisor response: "
+            throw new IllegalStateException(
+                    "supervisor response unparseable: "
                             + parseException.getMessage()
-                            + " | response preview: " + preview
+                            + " | response preview: " + preview,
+                    parseException
             );
-            throw new IllegalStateException(message, parseException);
         }
+    }
+
+    private static String safeFileName(String value) {
+        return value.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
     private Map<String, ClaudeGateway.AgentDef> buildAgentDefs(
@@ -207,6 +359,9 @@ public class SupervisorAgent {
                     || task.path("stored_candidate_count").asInt(0) > 0) {
                 return true;
             }
+            if (task.path("endpoint_review_count").asInt(0) > 0) {
+                return true;
+            }
             for (String field : REVIEW_ARRAY_FIELDS) {
                 JsonNode value = task.path(field);
                 if (value.isArray() && value.size() > 0) {
@@ -262,11 +417,11 @@ public class SupervisorAgent {
 
                 Rules:
                 1. Your first action after reading the user prompt must be
-                   `agent_spawn` calls for ALL selected hunter agents. Issue all
-                   agent_spawn calls together in one assistant turn.
-                2. Delegate each selected category to its matching pre-defined agent.
-                3. Spawn all selected hunters in parallel in your first turn.
-                   Wait for all returned results before synthesizing the final answer.
+                   a single `agent_spawn` call for the only registered hunter agent.
+                2. CRITICAL: Issue EXACTLY ONE agent_spawn call in this session.
+                   NEVER call agent_spawn more than once in this session — this
+                   causes a fatal framework error.
+                3. Wait for that hunter to return before synthesizing the final answer.
                 4. Only registered hunter agents are available. Categories without
                    candidate paths or category-specific review surfaces are not
                    registered and must not be invented.
@@ -324,7 +479,7 @@ public class SupervisorAgent {
                         properties.maxPrimaryHunters()
                                 + properties.maxAdditionalHunters()
                 );
-        int maxParallelHunters = candidates.size();
+        int maxParallelHunters = 1;
         String batchNote = hasBatches
                 ? """
 
@@ -349,9 +504,9 @@ public class SupervisorAgent {
                 %s
 
                 DELEGATION INSTRUCTIONS:
-                Invoke each pre-defined agent by name with the AgentScope
-                `agent_spawn` tool. Issue ALL agent_spawn calls together in your
-                first turn so hunters run in parallel.
+                Invoke the single pre-defined agent by name with the AgentScope
+                `agent_spawn` tool. You MUST issue EXACTLY ONE agent_spawn
+                call in this session. Do not spawn any other agent.
                 Do NOT use file-reading, file-writing, or skill-loading tools
                 yourself. Memory tools are disabled. Delegate all source
                 inspection to hunters.
@@ -360,6 +515,14 @@ public class SupervisorAgent {
 
                 Select the specialists appropriate for this project. When intelligent
                 selection is disabled, delegate all available agents.
+
+                ════════════════════════════════════════════════════════════════
+                FINAL REMINDER — JSON ONLY
+                After the agent_spawn result is collected, output EXACTLY ONE
+                JSON object: {"selected_hunters":[...],"rationale":"...","findings":[...]}
+                No prose, no markdown, no summary text before or after.
+                Start your final message with { and end with }.
+                ════════════════════════════════════════════════════════════════
                 """.formatted(
                 sourceRoot.toAbsolutePath().normalize(),
                 objectMapper.writeValueAsString(techProfile),
@@ -390,19 +553,23 @@ public class SupervisorAgent {
 
             Execution steps:
             1. Load your `%s` skill with load_skill_through_path before making judgments.
-            2. Read the task file to get all candidate-path chunks.
-            3. Review EVERY candidate-path chunk and stored-candidate chunk. For
-               authorization, also review every endpoint in `authorization_surface`.
-            4. For each candidate, validate the entrypoint-to-sink path against source code.
-            5. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
-            6. Never execute shell commands, create files, or delegate to another agent.
-            7. Return a single JSON object: {"chunks_reviewed": N, "findings": [...]}.
+            2. Read the task file to get all candidate-path, stored-candidate,
+               and endpoint-review chunks.
+            3. Review EVERY candidate-path chunk, stored-candidate chunk, and
+               endpoint in `endpoint_review_chunks` / `endpoint_review_surface`.
+               For authorization, also review every endpoint in `authorization_surface`.
+            4. For each endpoint-review item, read the referenced controller method
+               and decide whether it is vulnerable, safe/sec, or not applicable.
+            5. For each candidate, validate the entrypoint-to-sink path against source code.
+            6. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
+            7. Never execute shell commands, create files, or delegate to another agent.
+            8. Return a single JSON object: {"chunks_reviewed": N, "endpoint_reviewed": N, "findings": [...]}.
                Each finding must contain: rule_id, verdict, title, severity, confidence,
                file_path, start_line, message, evidence, vuln_type, http_method,
                http_path, entrypoint, reachability, discovery_source, data_flow_path.
                Use verdict values CONFIRM, DOWNGRADE, or NEEDS_REVIEW. Do not
                include SUPPRESS candidates in findings.
-            8. No markdown fences, no explanatory text around the JSON.
+            9. No markdown fences, no explanatory text around the JSON.
             """;
 
     private SupervisorEnvelope parseEnvelope(
@@ -584,6 +751,12 @@ public class SupervisorAgent {
             List<String> selectedHunters,
             String rationale,
             List<Map<String, Object>> findings
+    ) { }
+
+    private record HunterSessionResult(
+            String hunter,
+            SupervisorEnvelope envelope,
+            String failure
     ) { }
 
     public record SupervisorResult(

@@ -2,6 +2,8 @@ package com.huawei.audit.job;
 
 import com.huawei.audit.domain.AuditJob;
 import java.io.IOException;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -16,14 +18,18 @@ public class JobLogBroker {
             JobLogBroker.class
     );
 
+    private static final DateTimeFormatter TIME_FMT =
+            DateTimeFormatter.ofPattern("HH:mm:ss");
+
     private final ConcurrentHashMap<String, CopyOnWriteArrayList<SseEmitter>> subscribers =
             new ConcurrentHashMap<>();
 
     public void publish(AuditJob job, String line) {
-        job.appendLog(line);
+        String stamped = "[" + LocalTime.now().format(TIME_FMT) + "] " + line;
+        job.appendLog(stamped);
         writeBackendLog(job.jobId(), line);
         for (SseEmitter emitter : subscribers(job.jobId())) {
-            send(emitter, line);
+            send(emitter, stamped);
         }
     }
 
