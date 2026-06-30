@@ -39,6 +39,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             "Review every endpoint_review chunk as first-class audit input, even when candidate_count is zero.",
             "For endpoint_review items, inspect the referenced controller method and classify vulnerable versus sec/safe examples from source evidence.",
             "Treat endpoint business_intents, risk_hypotheses and memory_priors as harness-generated audit priors; validate or reject each from current source evidence.",
+            "Treat approved_rules as human-approved rule guidance, not as automatic verdicts; re-validate each applicable rule from current source evidence.",
             "Do not report a business-intent hypothesis unless source code proves attacker control, security impact and missing/ineffective mitigation.",
             "Use suggested_poc_checks and poc_plan as validation guidance only; do not execute PoC payloads inside this static-review stage.",
             "If a finding is confirmed, copy the relevant poc_plan item into the finding as poc_plan and keep it marked STATIC_POC_PLAN_ONLY.",
@@ -238,12 +239,20 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                     endpointSurface,
                     dependencies
             );
+            List<Map<String, Object>> approvedRules = auditMemory.recallApprovedRules(
+                    job,
+                    taskName,
+                    teamFocus,
+                    endpointSurface,
+                    dependencies
+            );
             writeTaskFile(taskFile, taskName, sourceRoot, indexFile,
                     candidateCount, candidateChunks,
                     storedCount, storedChunks,
                     endpointSurface, endpointChunks, endpointCount,
                     teamFocus, analysis,
-                    memoryPriors);
+                    memoryPriors,
+                    approvedRules);
             manifest.put(taskName, absolute(taskFile));
             expandedCandidates.add(taskName);
             return;
@@ -261,6 +270,13 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                         endpointSurface,
                         dependencies
                 ),
+                auditMemory.recallApprovedRules(
+                        job,
+                        taskName,
+                        teamFocus,
+                        endpointSurface,
+                        dependencies
+                ),
                 maxChunks, manifest, expandedCandidates, job);
     }
 
@@ -272,6 +288,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             String teamFocus,
             WhiteBoxAnalysisService.AnalysisResult analysis,
             List<Map<String, Object>> memoryPriors,
+            List<Map<String, Object>> approvedRules,
             int maxChunks, Map<String, String> manifest,
             List<String> expandedCandidates, AuditJob job
     ) throws Exception {
@@ -311,7 +328,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                     List.of(), be, beCount,
                     teamFocus,
                     analysis,
-                    memoryPriors);
+                    memoryPriors,
+                    approvedRules);
             manifest.put(batchName, absolute(batchFile));
             expandedCandidates.add(batchName);
         }
@@ -338,7 +356,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         writeTaskFile(taskFile, hunter, sourceRoot, indexFile,
                 candidateCount, candidateChunks, storedCount, storedChunks,
                 endpointSurface, endpointChunks, endpointSurface.size(),
-                "general", analysis, List.of());
+                "general", analysis, List.of(), List.of());
     }
 
     private void writeTaskFile(
@@ -350,7 +368,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             int endpointCount,
             String teamFocus,
             WhiteBoxAnalysisService.AnalysisResult analysis,
-            List<Map<String, Object>> memoryPriors
+            List<Map<String, Object>> memoryPriors,
+            List<Map<String, Object>> approvedRules
     ) throws Exception {
         String baseHunter = EvidencePackagePolicy.baseHunterName(hunter);
         Map<String, Object> task = new LinkedHashMap<>();
@@ -374,12 +393,14 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         }
         task.put("endpoint_review_surface", endpointSurface);
         task.put("memory_priors", memoryPriors == null ? List.of() : memoryPriors);
+        task.put("approved_rules", approvedRules == null ? List.of() : approvedRules);
         task.put("harness_decision", harnessDecision(
                 hunter,
                 candidateCount,
                 storedCount,
                 endpointCount,
-                memoryPriors
+                memoryPriors,
+                approvedRules
         ));
         task.put("unresolved_entrypoints", analysis.entryPoints().stream()
                 .filter(entry -> "UNRESOLVED".equals(entry.bindingStatus())).toList());
@@ -392,12 +413,23 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             int candidateCount,
             int storedCount,
             int endpointCount,
-            List<Map<String, Object>> memoryPriors
+            List<Map<String, Object>> memoryPriors,
+            List<Map<String, Object>> approvedRules
     ) {
         int reviewItems = candidateCount + storedCount + endpointCount;
         int priorScore = 0;
         int highTrustPriors = 0;
         List<String> reasons = new ArrayList<>();
+        List<Map<String, Object>> activeRules = approvedRules == null
+                ? List.of()
+                : approvedRules;
+        for (Map<String, Object> rule : activeRules) {
+            priorScore += 8;
+            highTrustPriors++;
+            if (reasons.size() < 3) {
+                reasons.add("APPROVED_RULE:" + rule.getOrDefault("rule_id", ""));
+            }
+        }
         for (Map<String, Object> prior : memoryPriors == null ? List.<Map<String, Object>>of() : memoryPriors) {
             String kind = String.valueOf(prior.getOrDefault("kind", ""));
             int weight = switch (kind) {
@@ -430,6 +462,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                 "recommended_steps", steps,
                 "review_item_count", reviewItems,
                 "memory_prior_count", memoryPriors == null ? 0 : memoryPriors.size(),
+                "approved_rule_count", activeRules.size(),
                 "high_trust_prior_count", highTrustPriors,
                 "rationale", reasons.isEmpty()
                         ? "baseline review budget from current evidence"

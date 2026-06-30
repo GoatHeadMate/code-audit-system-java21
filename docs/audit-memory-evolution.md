@@ -35,6 +35,7 @@ The first implementation is deliberately conservative:
 - Rewrite approved rule snapshots into `audit-memory/approved-rules.jsonl`.
 - Append hunter execution telemetry to `audit-memory/agent-runs.jsonl`.
 - Inject priors into hunter tasks as context only.
+- Inject matching approved rules into hunter tasks as `approved_rules`.
 - Generate a `harness_decision` object in each hunter task with
   `priority_score`, `recommended_steps`, prior counts, and rationale.
 - Sort hunter sessions by `priority_score` and pass `recommended_steps` to the
@@ -60,6 +61,8 @@ The first implementation is deliberately conservative:
 ## Implemented Harness Decisions
 
 - Approved rules and historical PoC successes increase team priority and steps.
+- Matching approved rules are exposed separately from historical priors so
+  hunters can treat them as human-gated rule guidance.
 - Confirmed findings and missed-finding feedback increase review priority.
 - False-positive, PoC-failure and risk-downgrade feedback still trigger review,
   but as validation guidance rather than automatic suppression.

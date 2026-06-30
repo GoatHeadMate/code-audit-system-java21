@@ -666,6 +666,8 @@ public class SupervisorAgent {
                and decide whether it is vulnerable, safe/sec, or not applicable.
                Treat `business_intents`, `risk_hypotheses`, and
                `suggested_poc_checks` / `poc_plan` as the harness-generated audit plan.
+               Treat `approved_rules` as human-approved rule guidance that
+               raises review priority, not as an automatic verdict.
                Validate or reject each hypothesis from source evidence; do not
                execute PoC payloads in this static-review stage.
             5. For each candidate, validate the entrypoint-to-sink path against source code.

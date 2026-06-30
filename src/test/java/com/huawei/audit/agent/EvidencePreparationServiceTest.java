@@ -251,6 +251,94 @@ class EvidencePreparationServiceTest {
     }
 
     @Test
+    void writesApprovedRulesAsHumanGatedRuleGuidance() throws Exception {
+        Path source = tempDir.resolve("approved-rule-source");
+        Files.createDirectories(source);
+        Files.writeString(source.resolve("ProxyController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class ProxyController {
+                    @GetMapping("/proxy")
+                    String proxy(@RequestParam String url) {
+                        return url;
+                    }
+                }
+                """);
+
+        ObjectMapper mapper = new ObjectMapper();
+        AuditMemoryService memory = new AuditMemoryService() {
+            @Override
+            public void rememberFindings(
+                    AuditJob job,
+                    Path sourceRoot,
+                    Map<String, Object> techProfile,
+                    List<Map<String, Object>> findings
+            ) {
+            }
+
+            @Override
+            public List<Map<String, Object>> recallPriors(
+                    AuditJob job,
+                    String hunter,
+                    String teamFocus,
+                    List<Map<String, Object>> endpointSurface,
+                    List<Map<String, String>> dependencies
+            ) {
+                return List.of();
+            }
+
+            @Override
+            public List<Map<String, Object>> recallApprovedRules(
+                    AuditJob job,
+                    String hunter,
+                    String teamFocus,
+                    List<Map<String, Object>> endpointSurface,
+                    List<Map<String, String>> dependencies
+            ) {
+                return List.of(Map.of(
+                        "rule_id", "ssrf-approved",
+                        "vuln_type", "SSRF",
+                        "match_score", 6,
+                        "policy", "Approved rule guidance only"
+                ));
+            }
+        };
+        EvidencePreparationService service = new EvidencePreparationServiceImpl(
+                new WhiteBoxAnalysisServiceImpl(List.of(new HttpEndpointScanner())),
+                mapper,
+                new JobLogBroker(),
+                TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
+                null,
+                memory
+        );
+        AuditJob job = new AuditJob("approved-rule1", "java");
+        job.workDir(tempDir.resolve("audit_approved_rule1"));
+        Files.createDirectories(job.workDir());
+
+        var result = service.prepare(job, source, List.of("ssrf"), List.of());
+        String generatedTask = result.expandedCandidates().getFirst();
+        Path task = Path.of(result.manifest().get(generatedTask));
+        var taskJson = mapper.readTree(task.toFile());
+
+        assertThat(taskJson.path("approved_rules"))
+                .singleElement()
+                .satisfies(rule -> {
+                    assertThat(rule.path("rule_id").asText())
+                            .isEqualTo("ssrf-approved");
+                    assertThat(rule.path("policy").asText())
+                            .contains("Approved rule guidance only");
+                });
+        assertThat(taskJson.path("harness_decision")
+                .path("approved_rule_count")
+                .asInt()).isEqualTo(1);
+        assertThat(taskJson.path("harness_decision")
+                .path("recommended_steps")
+                .asInt()).isGreaterThan(18);
+    }
+
+    @Test
     void splitsLargeEndpointReviewSurfaceIntoBatches() throws Exception {
         Path source = tempDir.resolve("large-surface-source");
         Files.createDirectories(source);

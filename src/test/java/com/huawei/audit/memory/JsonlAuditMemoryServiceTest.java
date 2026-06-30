@@ -368,6 +368,24 @@ class JsonlAuditMemoryServiceTest {
                 .allSatisfy(prior ->
                         assertThat(prior.get("policy").toString())
                                 .contains("re-validate"));
+
+        var approvedRules = memory.recallApprovedRules(
+                new AuditJob("gate-job4", "java"),
+                "ssrf",
+                "general",
+                List.of(Map.of(
+                        "path", "/proxy",
+                        "file_path", "src/main/java/demo/ProxyController.java"
+                )),
+                List.of()
+        );
+        assertThat(approvedRules).singleElement().satisfies(rule -> {
+            assertThat(rule)
+                    .containsEntry("rule_id", "ssrf-urlconnection")
+                    .containsEntry("vuln_type", "SSRF");
+            assertThat(rule.get("policy").toString())
+                    .contains("Approved rule guidance only");
+        });
     }
 
     @Test

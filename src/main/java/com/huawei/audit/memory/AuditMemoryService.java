@@ -80,6 +80,16 @@ public interface AuditMemoryService {
     ) {
     }
 
+    default List<Map<String, Object>> recallApprovedRules(
+            AuditJob job,
+            String hunter,
+            String teamFocus,
+            List<Map<String, Object>> endpointSurface,
+            List<Map<String, String>> dependencies
+    ) {
+        return List.of();
+    }
+
     List<Map<String, Object>> recallPriors(
             AuditJob job,
             String hunter,

@@ -349,6 +349,68 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         }
     }
 
+    @Override
+    public List<Map<String, Object>> recallApprovedRules(
+            AuditJob job,
+            String hunter,
+            String teamFocus,
+            List<Map<String, Object>> endpointSurface,
+            List<Map<String, String>> dependencies
+    ) {
+        if (!Files.isRegularFile(approvedRulesFile)) {
+            return List.of();
+        }
+        try {
+            String baseHunter = baseHunterName(hunter);
+            Set<String> relevantTypes = HUNTER_TYPES.getOrDefault(baseHunter, Set.of());
+            Set<String> currentDependencies = dependencyKeysFromList(dependencies);
+            Set<String> endpointPaths = endpointValues(endpointSurface, "path");
+            Set<String> endpointFiles = endpointValues(endpointSurface, "file_path");
+            List<Map<String, Object>> rules = new ArrayList<>();
+            for (String line : recentLines(approvedRulesFile)) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                JsonNode node = objectMapper.readTree(line);
+                String type = text(node, "vuln_type");
+                if (!relevantTypes.isEmpty() && !relevantTypes.contains(type)) {
+                    continue;
+                }
+                int score = score(node, currentDependencies, endpointPaths,
+                        endpointFiles, teamFocus);
+                if (score < MIN_RECALL_SCORE) {
+                    continue;
+                }
+                Map<String, Object> rule = new LinkedHashMap<>();
+                rule.put("rule_id", text(node, "rule_id"));
+                rule.put("vuln_type", type);
+                rule.put("file_pattern", text(node, "file_pattern"));
+                rule.put("http_path", text(node, "http_path"));
+                rule.put("confidence_score", node.path("confidence_score").asDouble(0));
+                rule.put("support_count", node.path("support_count").asInt(0));
+                rule.put("match_score", score);
+                rule.put("suggested_agent_guidance",
+                        text(node, "suggested_agent_guidance"));
+                rule.put("decision_rationale", text(node, "decision_rationale"));
+                rule.put("decision_reviewer", text(node, "decision_reviewer"));
+                rule.put("decided_at", text(node, "decided_at"));
+                rule.put("policy",
+                        "Approved rule guidance only; re-validate current source before reporting, suppressing or lowering severity.");
+                rules.add(rule);
+            }
+            return rules.stream()
+                    .sorted(Comparator
+                            .comparingInt((Map<String, Object> rule) ->
+                                    ((Number) rule.getOrDefault("match_score", 0)).intValue())
+                            .reversed()
+                            .thenComparing(rule -> rule.getOrDefault("rule_id", "").toString()))
+                    .limit(MAX_RECALL_PRIORS)
+                    .toList();
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
     private void collectPrior(
             AuditJob job,
             Set<String> relevantTypes,
