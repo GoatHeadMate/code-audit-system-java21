@@ -253,7 +253,7 @@ public class AuditController {
         if (verdict.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
-                    "verdict must be CONFIRM, FALSE_POSITIVE or NEEDS_REVIEW"
+                    "verdict must be CONFIRM, FALSE_POSITIVE, NEEDS_REVIEW, DUPLICATE, RISK_DOWNGRADE, MISSED_FINDING, POC_SUCCESS or POC_FAILURE"
             );
         }
         auditMemory.rememberFeedback(
@@ -262,7 +262,10 @@ public class AuditController {
                 job.findings().get(findingIndex),
                 verdict,
                 request == null ? "" : request.rationale(),
-                request == null ? "" : request.reviewer()
+                request == null ? "" : request.reviewer(),
+                request == null ? "" : request.pocStatus(),
+                request == null ? "" : request.learningNote(),
+                request == null ? "" : request.targetSeverity()
         );
         return new FindingFeedbackResponse(
                 job.jobId(),
@@ -350,6 +353,11 @@ public class AuditController {
             case "CONFIRM", "CONFIRMED", "TRUE_POSITIVE" -> "CONFIRM";
             case "FALSE_POSITIVE", "SUPPRESS", "SUPPRESSED" -> "FALSE_POSITIVE";
             case "NEEDS_REVIEW", "REVIEW" -> "NEEDS_REVIEW";
+            case "DUPLICATE", "DUP" -> "DUPLICATE";
+            case "RISK_DOWNGRADE", "DOWNGRADE", "LOWER_RISK" -> "RISK_DOWNGRADE";
+            case "MISSED_FINDING", "MISSED", "FALSE_NEGATIVE" -> "MISSED_FINDING";
+            case "POC_SUCCESS", "POC_PASSED", "EXPLOIT_SUCCESS" -> "POC_SUCCESS";
+            case "POC_FAILURE", "POC_FAILED", "EXPLOIT_FAILED" -> "POC_FAILURE";
             default -> "";
         };
     }

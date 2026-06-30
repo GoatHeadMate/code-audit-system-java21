@@ -39,8 +39,19 @@ public final class ApiDtos {
     public record FindingFeedbackRequest(
             String verdict,
             String rationale,
-            String reviewer
-    ) { }
+            String reviewer,
+            String pocStatus,
+            String learningNote,
+            String targetSeverity
+    ) {
+        public FindingFeedbackRequest(
+                String verdict,
+                String rationale,
+                String reviewer
+        ) {
+            this(verdict, rationale, reviewer, "", "", "");
+        }
+    }
 
     public record FindingFeedbackResponse(
             String jobId,

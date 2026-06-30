@@ -805,17 +805,26 @@ function onScroll(el) {
 }
 
 // ── Findings ───────────────────────────────────────────────────────
-async function sendFeedback(idx, verdict, btn) {
+async function sendFeedback(idx, verdict, btn, extra={}) {
   if (!selId) return;
   const wrap = btn.closest('.feedback-actions');
   try {
     const r = await fetch(`/audit/${selId}/findings/${idx}/feedback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ verdict, reviewer: 'ui' })
+      body: JSON.stringify({ verdict, reviewer: 'ui', ...extra })
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const label = { CONFIRM:'已确认漏洞', FALSE_POSITIVE:'已标记误报', NEEDS_REVIEW:'已标记待复核' }[verdict] || verdict;
+    const label = {
+      CONFIRM:'已确认漏洞',
+      FALSE_POSITIVE:'已标记误报',
+      NEEDS_REVIEW:'已标记待复核',
+      DUPLICATE:'已标记重复',
+      RISK_DOWNGRADE:'已标记风险降级',
+      MISSED_FINDING:'已记录漏报补充',
+      POC_SUCCESS:'已记录 PoC 成功',
+      POC_FAILURE:'已记录 PoC 失败'
+    }[verdict] || verdict;
     if (wrap) wrap.innerHTML = `<span class="text-xs text-emerald-600 font-medium">${label}（已记入审计记忆）</span>`;
   } catch (e) {
     if (wrap) wrap.insertAdjacentHTML('beforeend', `<span class="text-xs text-red-500 ml-1">提交失败，请重试</span>`);
@@ -961,6 +970,11 @@ function mkFinding(f, idx) {
         <button onclick="sendFeedback(${idx},'CONFIRM',this)" class="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">确认漏洞</button>
         <button onclick="sendFeedback(${idx},'FALSE_POSITIVE',this)" class="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors">误报</button>
         <button onclick="sendFeedback(${idx},'NEEDS_REVIEW',this)" class="text-xs px-2 py-1 rounded border border-amber-200 text-amber-600 hover:bg-amber-50 transition-colors">待复核</button>
+        <button onclick="sendFeedback(${idx},'POC_SUCCESS',this,{pocStatus:'SUCCESS'})" class="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">PoC 成功</button>
+        <button onclick="sendFeedback(${idx},'POC_FAILURE',this,{pocStatus:'FAILURE'})" class="text-xs px-2 py-1 rounded border border-orange-200 text-orange-600 hover:bg-orange-50 transition-colors">PoC 失败</button>
+        <button onclick="sendFeedback(${idx},'DUPLICATE',this)" class="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">重复</button>
+        <button onclick="sendFeedback(${idx},'RISK_DOWNGRADE',this,{targetSeverity:'LOW'})" class="text-xs px-2 py-1 rounded border border-blue-200 text-blue-600 hover:bg-blue-50 transition-colors">风险降级</button>
+        <button onclick="sendFeedback(${idx},'MISSED_FINDING',this)" class="text-xs px-2 py-1 rounded border border-purple-200 text-purple-600 hover:bg-purple-50 transition-colors">漏报补充</button>
       </div>
     </div>`;
 }

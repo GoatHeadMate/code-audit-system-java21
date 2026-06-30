@@ -191,6 +191,71 @@ class JsonlAuditMemoryServiceTest {
     }
 
     @Test
+    void storesPocFeedbackAsStructuredLearningEvents() throws Exception {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        AuditJob job = new AuditJob("poc-memory1", "java");
+        job.techProfile(Map.of(
+                "dependencies",
+                List.of(Map.of(
+                        "group_id", "org.springframework",
+                        "artifact_id", "spring-web"
+                ))
+        ));
+        Map<String, Object> finding = Map.of(
+                "rule_id", "cmd-runtime",
+                "vuln_type", "COMMAND_INJECTION",
+                "file_path", "src/main/java/demo/CmdController.java",
+                "http_path", "/cmd"
+        );
+
+        memory.rememberFeedback(
+                job,
+                0,
+                finding,
+                "POC_SUCCESS",
+                "Manual PoC executed calc",
+                "expert",
+                "SUCCESS",
+                "same endpoint shape should be prioritized",
+                "CRITICAL"
+        );
+
+        Path feedback = tempDir.resolve("audit-memory").resolve("feedback.jsonl");
+        assertThat(Files.readString(feedback))
+                .contains("\"feedback_verdict\":\"POC_SUCCESS\"")
+                .contains("\"learning_signal\":\"TRUE_POSITIVE\"")
+                .contains("\"poc_status\":\"SUCCESS\"")
+                .contains("\"target_severity\":\"CRITICAL\"");
+
+        var priors = memory.recallPriors(
+                new AuditJob("poc-memory2", "java"),
+                "code_execution",
+                "general",
+                List.of(Map.of(
+                        "path", "/cmd",
+                        "file_path", "src/main/java/demo/CmdController.java"
+                )),
+                List.of(Map.of(
+                        "group_id", "org.springframework",
+                        "artifact_id", "spring-web"
+                ))
+        );
+
+        assertThat(priors).singleElement().satisfies(prior -> {
+            assertThat(prior)
+                    .containsEntry("kind", "HISTORICAL_POC_SUCCESS_PRIOR")
+                    .containsEntry("vuln_type", "COMMAND_INJECTION")
+                    .containsEntry("rule_id", "cmd-runtime");
+            assertThat(prior.get("policy").toString())
+                    .contains("PoC success")
+                    .contains("current-source");
+        });
+    }
+
+    @Test
     void refreshesRuleCandidatesFromFindingsAndFeedback() throws Exception {
         JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
                 new ObjectMapper(),

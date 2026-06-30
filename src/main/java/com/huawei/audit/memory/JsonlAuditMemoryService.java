@@ -89,6 +89,22 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             String rationale,
             String reviewer
     ) {
+        rememberFeedback(job, findingIndex, finding, verdict, rationale, reviewer,
+                "", "", "");
+    }
+
+    @Override
+    public synchronized void rememberFeedback(
+            AuditJob job,
+            int findingIndex,
+            Map<String, Object> finding,
+            String verdict,
+            String rationale,
+            String reviewer,
+            String pocStatus,
+            String learningNote,
+            String targetSeverity
+    ) {
         if (job == null || finding == null || finding.isEmpty()) {
             return;
         }
@@ -105,7 +121,11 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             event.put("job_id", job.jobId());
             event.put("finding_index", findingIndex);
             event.put("feedback_verdict", normalizedVerdict);
+            event.put("learning_signal", learningSignal(normalizedVerdict));
+            event.put("poc_status", normalizePocStatus(pocStatus));
             event.put("feedback_rationale", safeText(rationale));
+            event.put("learning_note", safeText(learningNote));
+            event.put("target_severity", normalizeSeverity(targetSeverity));
             event.put("reviewer", safeText(reviewer));
             event.put("lang", job.lang());
             event.put("source_type", job.sourceType());
@@ -497,6 +517,41 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             case "CONFIRM", "CONFIRMED", "TRUE_POSITIVE" -> "CONFIRM";
             case "FALSE_POSITIVE", "SUPPRESS", "SUPPRESSED" -> "FALSE_POSITIVE";
             case "NEEDS_REVIEW", "REVIEW" -> "NEEDS_REVIEW";
+            case "DUPLICATE", "DUP" -> "DUPLICATE";
+            case "RISK_DOWNGRADE", "DOWNGRADE", "LOWER_RISK" -> "RISK_DOWNGRADE";
+            case "MISSED_FINDING", "MISSED", "FALSE_NEGATIVE" -> "MISSED_FINDING";
+            case "POC_SUCCESS", "POC_PASSED", "EXPLOIT_SUCCESS" -> "POC_SUCCESS";
+            case "POC_FAILURE", "POC_FAILED", "EXPLOIT_FAILED" -> "POC_FAILURE";
+            default -> "";
+        };
+    }
+
+    private String learningSignal(String verdict) {
+        return switch (verdict) {
+            case "CONFIRM", "POC_SUCCESS" -> "TRUE_POSITIVE";
+            case "FALSE_POSITIVE", "POC_FAILURE" -> "NEGATIVE_VALIDATION";
+            case "RISK_DOWNGRADE" -> "RISK_ADJUSTMENT";
+            case "DUPLICATE" -> "DUPLICATE";
+            case "MISSED_FINDING" -> "FALSE_NEGATIVE";
+            case "NEEDS_REVIEW" -> "REVIEW";
+            default -> "UNKNOWN";
+        };
+    }
+
+    private String normalizePocStatus(String pocStatus) {
+        String normalized = normalize(pocStatus);
+        return switch (normalized) {
+            case "SUCCESS", "PASSED", "EXPLOIT_SUCCESS", "POC_SUCCESS" -> "SUCCESS";
+            case "FAILURE", "FAILED", "EXPLOIT_FAILED", "POC_FAILURE" -> "FAILURE";
+            case "NOT_RUN", "UNTESTED", "NONE" -> "NOT_RUN";
+            default -> "";
+        };
+    }
+
+    private String normalizeSeverity(String severity) {
+        String normalized = normalize(severity);
+        return switch (normalized) {
+            case "CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO" -> normalized;
             default -> "";
         };
     }
@@ -682,6 +737,12 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         private int falsePositiveFeedback;
         private int confirmFeedback;
         private int reviewFeedback;
+        private int duplicateFeedback;
+        private int riskDowngradeFeedback;
+        private int missedFindingFeedback;
+        private int pocSuccessFeedback;
+        private int pocFailureFeedback;
+        private int approvedRuleSupport;
 
         PriorAccumulator(String vulnType, String ruleId) {
             this.vulnType = vulnType;
@@ -690,6 +751,11 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
 
         void add(JsonNode node, int matchScore) {
             score += matchScore;
+            String eventType = textStatic(node, "event_type");
+            if ("approved_rule".equals(eventType)) {
+                approvedRuleSupport++;
+                score += 4;
+            }
             String feedback = textStatic(node, "feedback_verdict");
             if ("FALSE_POSITIVE".equals(feedback)) {
                 falsePositiveFeedback++;
@@ -697,19 +763,37 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 confirmFeedback++;
             } else if ("NEEDS_REVIEW".equals(feedback)) {
                 reviewFeedback++;
+            } else if ("DUPLICATE".equals(feedback)) {
+                duplicateFeedback++;
+            } else if ("RISK_DOWNGRADE".equals(feedback)) {
+                riskDowngradeFeedback++;
+            } else if ("MISSED_FINDING".equals(feedback)) {
+                missedFindingFeedback++;
+            } else if ("POC_SUCCESS".equals(feedback)) {
+                pocSuccessFeedback++;
+                confirmFeedback++;
+                score += 3;
+            } else if ("POC_FAILURE".equals(feedback)) {
+                pocFailureFeedback++;
+                falsePositiveFeedback++;
+                score += 2;
             }
-            examples.add(Map.of(
-                    "job_id", textStatic(node, "job_id"),
-                    "file_path", textStatic(node, "file_path"),
-                    "start_line", textStatic(node, "start_line"),
-                    "http_path", textStatic(node, "http_path"),
-                    "title", textStatic(node, "title"),
-                    "feedback_verdict", feedback,
-                    "feedback_rationale", textStatic(node, "feedback_rationale"),
-                    "recorded_at", textStatic(node, "recorded_at")
-            ));
-            examples.sort(Comparator.comparing(example ->
-                    example.getOrDefault("recorded_at", "").toString()));
+            Map<String, Object> example = new LinkedHashMap<>();
+            example.put("job_id", textStatic(node, "job_id"));
+            example.put("file_path", textStatic(node, "file_path"));
+            example.put("start_line", textStatic(node, "start_line"));
+            example.put("http_path", textStatic(node, "http_path"));
+            example.put("title", textStatic(node, "title"));
+            example.put("feedback_verdict", feedback);
+            example.put("learning_signal", textStatic(node, "learning_signal"));
+            example.put("poc_status", textStatic(node, "poc_status"));
+            example.put("target_severity", textStatic(node, "target_severity"));
+            example.put("feedback_rationale", textStatic(node, "feedback_rationale"));
+            example.put("learning_note", textStatic(node, "learning_note"));
+            example.put("recorded_at", textStatic(node, "recorded_at"));
+            examples.add(example);
+            examples.sort(Comparator.comparing(row ->
+                    row.getOrDefault("recorded_at", "").toString()));
         }
 
         int score() {
@@ -725,7 +809,13 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             prior.put("feedback_summary", Map.of(
                     "false_positive", falsePositiveFeedback,
                     "confirm", confirmFeedback,
-                    "needs_review", reviewFeedback
+                    "needs_review", reviewFeedback,
+                    "duplicate", duplicateFeedback,
+                    "risk_downgrade", riskDowngradeFeedback,
+                    "missed_finding", missedFindingFeedback,
+                    "poc_success", pocSuccessFeedback,
+                    "poc_failure", pocFailureFeedback,
+                    "approved_rule", approvedRuleSupport
             ));
             prior.put("examples", examples.stream()
                     .skip(Math.max(0, examples.size() - 3))
@@ -735,11 +825,29 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         }
 
         private String kind() {
+            if (approvedRuleSupport > 0) {
+                return "APPROVED_RULE_PRIOR";
+            }
+            if (pocSuccessFeedback > 0 && falsePositiveFeedback == 0) {
+                return "HISTORICAL_POC_SUCCESS_PRIOR";
+            }
+            if (pocFailureFeedback > 0 && confirmFeedback == 0) {
+                return "HISTORICAL_NEGATIVE_VALIDATION_PRIOR";
+            }
             if (falsePositiveFeedback > 0 && confirmFeedback == 0) {
                 return "HISTORICAL_FALSE_POSITIVE_PRIOR";
             }
             if (confirmFeedback > 0 && falsePositiveFeedback == 0) {
                 return "HISTORICAL_CONFIRMED_PRIOR";
+            }
+            if (riskDowngradeFeedback > 0) {
+                return "HISTORICAL_RISK_ADJUSTMENT_PRIOR";
+            }
+            if (missedFindingFeedback > 0) {
+                return "HISTORICAL_MISSED_FINDING_PRIOR";
+            }
+            if (duplicateFeedback > 0) {
+                return "HISTORICAL_DUPLICATE_PRIOR";
             }
             if (falsePositiveFeedback > 0 || confirmFeedback > 0 || reviewFeedback > 0) {
                 return "HISTORICAL_FEEDBACK_PRIOR";
@@ -748,11 +856,23 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         }
 
         private String policy() {
+            if (approvedRuleSupport > 0) {
+                return "Approved rule prior only: prioritize this pattern, but still re-validate current source evidence before reporting or suppressing.";
+            }
+            if (pocSuccessFeedback > 0 && falsePositiveFeedback == 0) {
+                return "Prior only: historical PoC success exists; re-validate exploit preconditions and current-source reachability before reporting.";
+            }
+            if (pocFailureFeedback > 0 && confirmFeedback == 0) {
+                return "Prior only: historical negative validation exists; verify whether the same mitigation, PoC failure condition or reachability break exists in current source before suppressing.";
+            }
             if (falsePositiveFeedback > 0 && confirmFeedback == 0) {
                 return "Prior only: historical false-positive feedback exists; verify whether the same mitigation or reachability break exists in current source before suppressing.";
             }
             if (confirmFeedback > 0 && falsePositiveFeedback == 0) {
                 return "Prior only: historical confirmation exists; re-validate attacker control, impact and missing mitigation from current source before reporting.";
+            }
+            if (riskDowngradeFeedback > 0) {
+                return "Prior only: historical risk downgrade exists; verify current impact before lowering severity.";
             }
             return "Prior only: use as attention guidance; re-validate from current source before reporting.";
         }
@@ -774,6 +894,11 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         private int confirmFeedback;
         private int falsePositiveFeedback;
         private int needsReviewFeedback;
+        private int duplicateFeedback;
+        private int riskDowngradeFeedback;
+        private int missedFindingFeedback;
+        private int pocSuccessFeedback;
+        private int pocFailureFeedback;
 
         RuleCandidateAccumulator(
                 String vulnType,
@@ -803,12 +928,26 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 falsePositiveFeedback++;
             } else if ("NEEDS_REVIEW".equals(feedback)) {
                 needsReviewFeedback++;
+            } else if ("DUPLICATE".equals(feedback)) {
+                duplicateFeedback++;
+            } else if ("RISK_DOWNGRADE".equals(feedback)) {
+                riskDowngradeFeedback++;
+            } else if ("MISSED_FINDING".equals(feedback)) {
+                missedFindingFeedback++;
+            } else if ("POC_SUCCESS".equals(feedback)) {
+                pocSuccessFeedback++;
+                confirmFeedback++;
+            } else if ("POC_FAILURE".equals(feedback)) {
+                pocFailureFeedback++;
+                falsePositiveFeedback++;
             }
             if (provenance.size() < 5) {
                 provenance.add(Map.of(
                         "job_id", jobId,
                         "event_type", eventType,
                         "feedback_verdict", feedback,
+                        "learning_signal", textStatic(node, "learning_signal"),
+                        "poc_status", textStatic(node, "poc_status"),
                         "file_path", textStatic(node, "file_path"),
                         "start_line", textStatic(node, "start_line"),
                         "http_path", textStatic(node, "http_path"),
@@ -820,22 +959,31 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         boolean shouldEmit() {
             return positiveSupportCount() >= 2
                     || confirmFeedback > 0
-                    || falsePositiveFeedback > 0;
+                    || falsePositiveFeedback > 0
+                    || riskDowngradeFeedback > 0
+                    || missedFindingFeedback > 0
+                    || duplicateFeedback > 0;
         }
 
         int positiveSupportCount() {
-            return findingSupport + confirmFeedback + needsReviewFeedback;
+            return findingSupport + confirmFeedback
+                    + needsReviewFeedback + missedFindingFeedback;
         }
 
         int totalEvidenceCount() {
             return findingSupport + confirmFeedback
-                    + needsReviewFeedback + falsePositiveFeedback;
+                    + needsReviewFeedback + falsePositiveFeedback
+                    + duplicateFeedback + riskDowngradeFeedback
+                    + missedFindingFeedback;
         }
 
         double confidenceScore() {
             double raw = findingSupport + confirmFeedback * 2.0
                     + needsReviewFeedback * 0.5
-                    - falsePositiveFeedback * 1.5;
+                    + missedFindingFeedback * 1.5
+                    - falsePositiveFeedback * 1.5
+                    - riskDowngradeFeedback * 0.5
+                    - duplicateFeedback * 0.25;
             double bounded = Math.max(0.0, raw);
             return Math.round((bounded / Math.max(1.0, positiveSupportCount())) * 100.0) / 100.0;
         }
@@ -863,6 +1011,11 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             candidate.put("confirm_count", confirmFeedback);
             candidate.put("false_positive_count", falsePositiveFeedback);
             candidate.put("needs_review_count", needsReviewFeedback);
+            candidate.put("duplicate_count", duplicateFeedback);
+            candidate.put("risk_downgrade_count", riskDowngradeFeedback);
+            candidate.put("missed_finding_count", missedFindingFeedback);
+            candidate.put("poc_success_count", pocSuccessFeedback);
+            candidate.put("poc_failure_count", pocFailureFeedback);
             candidate.put("job_count", jobs.size());
             candidate.put("confidence_score", confidenceScore());
             candidate.put("suggested_agent_guidance", guidance());
@@ -875,7 +1028,11 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         private String guidance() {
             if (falsePositiveFeedback > 0 && confirmFeedback == 0) {
                 return "When a similar " + vulnType
-                        + " pattern appears, first verify whether the historical mitigation or reachability break is present before reporting.";
+                        + " pattern appears, first verify whether the historical mitigation, PoC failure condition or reachability break is present before reporting.";
+            }
+            if (riskDowngradeFeedback > 0) {
+                return "When a similar " + vulnType
+                        + " pattern appears, verify current business impact before preserving the original severity.";
             }
             if (confirmFeedback > 0) {
                 return "When a similar " + vulnType

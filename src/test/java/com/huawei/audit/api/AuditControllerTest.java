@@ -154,7 +154,10 @@ class AuditControllerTest {
                 new ApiDtos.FindingFeedbackRequest(
                         "false_positive",
                         "URL is restricted by a strict allowlist",
-                        "reviewer"
+                        "reviewer",
+                        "failed",
+                        "same sanitizer should be checked first",
+                        "LOW"
                 )
         );
 
@@ -165,7 +168,10 @@ class AuditControllerTest {
                 job.findings().getFirst(),
                 "FALSE_POSITIVE",
                 "URL is restricted by a strict allowlist",
-                "reviewer"
+                "reviewer",
+                "failed",
+                "same sanitizer should be checked first",
+                "LOW"
         );
     }
 

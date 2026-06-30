@@ -44,6 +44,21 @@ public interface AuditMemoryService {
             String rationale,
             String reviewer
     ) {
+        rememberFeedback(job, findingIndex, finding, verdict, rationale, reviewer,
+                "", "", "");
+    }
+
+    default void rememberFeedback(
+            AuditJob job,
+            int findingIndex,
+            Map<String, Object> finding,
+            String verdict,
+            String rationale,
+            String reviewer,
+            String pocStatus,
+            String learningNote,
+            String targetSeverity
+    ) {
     }
 
     default List<Map<String, Object>> listRuleCandidates() {
