@@ -34,6 +34,8 @@ The first implementation is deliberately conservative:
 - Record human rule decisions in `audit-memory/rule-decisions.jsonl`.
 - Rewrite approved rule snapshots into `audit-memory/approved-rules.jsonl`.
 - Append hunter execution telemetry to `audit-memory/agent-runs.jsonl`.
+- Maintain a rebuildable SQLite recall index at
+  `audit-memory/memory-index.sqlite`.
 - Inject priors into hunter tasks as context only.
 - Inject matching approved rules into hunter tasks as `approved_rules`.
 - Generate a `harness_decision` object in each hunter task with
@@ -68,6 +70,18 @@ The first implementation is deliberately conservative:
   but as validation guidance rather than automatic suppression.
 - Agent run telemetry records hunter name, status, duration, model-slot wait,
   findings count, steps budget, priority score, tools and failure reason.
+- Recall prefers the SQLite index for speed and falls back to JSONL logs when
+  the index is unavailable.
+
+## Storage Contract
+
+- JSONL files remain the auditable source of truth.
+- `memory-index.sqlite` is a derived cache for fast recall and may be deleted;
+  it is rebuilt from recent JSONL events on demand.
+- Rewritten derived files such as `approved-rules.jsonl` replace their index
+  rows, so rejected or discarded rules do not survive as stale approved priors.
+- Index failures must not block an audit run. The harness falls back to the
+  JSONL path and keeps all recalled memory as non-binding priors.
 
 This keeps learning observable and reversible while giving agents better
 attention without letting historical mistakes become automatic judgments.

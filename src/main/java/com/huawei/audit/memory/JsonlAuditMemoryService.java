@@ -4,12 +4,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.huawei.audit.config.AuditProperties;
 import com.huawei.audit.domain.AuditJob;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,7 +33,13 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
     private static final int SCHEMA_VERSION = 1;
     private static final int MAX_RECALL_PRIORS = 8;
     private static final int MAX_RECALL_LINES = 5_000;
+    private static final int MAX_INDEX_RECALL_ROWS = MAX_RECALL_LINES * 3;
     private static final int MIN_RECALL_SCORE = 2;
+    private static final String MEMORY_SOURCE = "findings.jsonl";
+    private static final String FEEDBACK_SOURCE = "feedback.jsonl";
+    private static final String RULE_DECISIONS_SOURCE = "rule-decisions.jsonl";
+    private static final String APPROVED_RULES_SOURCE = "approved-rules.jsonl";
+    private static final String AGENT_RUNS_SOURCE = "agent-runs.jsonl";
     private static final Map<String, Set<String>> HUNTER_TYPES = Map.of(
             "code_execution", Set.of(
                     "COMMAND_INJECTION", "SCRIPT_INJECTION",
@@ -58,6 +73,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
     private final Path ruleDecisionsFile;
     private final Path approvedRulesFile;
     private final Path agentRunsFile;
+    private final Path indexFile;
+    private final Object indexLock = new Object();
+    private volatile boolean indexReady;
 
     public JsonlAuditMemoryService(
             ObjectMapper objectMapper,
@@ -82,6 +100,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         this.agentRunsFile = properties.absoluteWorkspace()
                 .resolve("audit-memory")
                 .resolve("agent-runs.jsonl");
+        this.indexFile = properties.absoluteWorkspace()
+                .resolve("audit-memory")
+                .resolve("memory-index.sqlite");
     }
 
     @Override
@@ -152,6 +173,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     objectMapper.writeValueAsString(event) + System.lineSeparator(),
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
+            indexEventBestEffort(FEEDBACK_SOURCE, event);
             refreshRuleCandidates();
         } catch (Exception ignored) {
         }
@@ -170,6 +192,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         try {
             Files.createDirectories(memoryFile.getParent());
             StringBuilder lines = new StringBuilder();
+            List<Map<String, Object>> events = new ArrayList<>();
             Instant now = Instant.now();
             List<String> dependencyKeys = dependencyKeys(techProfile);
             for (Map<String, Object> finding : findings) {
@@ -203,6 +226,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 copy(event, finding, "discovered_by");
                 event.put("memory_policy",
                         "historical-prior-only; revalidate from current source");
+                events.add(event);
                 lines.append(objectMapper.writeValueAsString(event))
                         .append(System.lineSeparator());
             }
@@ -210,6 +234,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 Files.writeString(memoryFile, lines.toString(),
                         StandardOpenOption.CREATE,
                         StandardOpenOption.APPEND);
+                for (Map<String, Object> event : events) {
+                    indexEventBestEffort(MEMORY_SOURCE, event);
+                }
                 refreshRuleCandidates();
             }
         } catch (Exception ignored) {
@@ -224,9 +251,12 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             List<Map<String, Object>> endpointSurface,
             List<Map<String, String>> dependencies
     ) {
-        if (!Files.isRegularFile(memoryFile)
-                && !Files.isRegularFile(feedbackFile)
-                && !Files.isRegularFile(approvedRulesFile)) {
+        Optional<List<Map<String, Object>>> indexed = recallPriorsFromIndex(
+                job, hunter, teamFocus, endpointSurface, dependencies);
+        if (indexed.isPresent()) {
+            return indexed.get();
+        }
+        if (!hasAnyRecallSource()) {
             return List.of();
         }
         try {
@@ -308,6 +338,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     objectMapper.writeValueAsString(event) + System.lineSeparator(),
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
+            indexEventBestEffort(RULE_DECISIONS_SOURCE, event);
             refreshRuleCandidates();
             return readJsonlMaps(ruleCandidatesFile)
                     .stream()
@@ -345,6 +376,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     objectMapper.writeValueAsString(event) + System.lineSeparator(),
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
+            indexEventBestEffort(AGENT_RUNS_SOURCE, event);
         } catch (Exception ignored) {
         }
     }
@@ -357,6 +389,11 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             List<Map<String, Object>> endpointSurface,
             List<Map<String, String>> dependencies
     ) {
+        Optional<List<Map<String, Object>>> indexed = recallApprovedRulesFromIndex(
+                hunter, teamFocus, endpointSurface, dependencies);
+        if (indexed.isPresent()) {
+            return indexed.get();
+        }
         if (!Files.isRegularFile(approvedRulesFile)) {
             return List.of();
         }
@@ -409,6 +446,292 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private Optional<List<Map<String, Object>>> recallPriorsFromIndex(
+            AuditJob job,
+            String hunter,
+            String teamFocus,
+            List<Map<String, Object>> endpointSurface,
+            List<Map<String, String>> dependencies
+    ) {
+        try {
+            ensureIndex();
+            String baseHunter = baseHunterName(hunter);
+            Set<String> relevantTypes = HUNTER_TYPES.getOrDefault(baseHunter, Set.of());
+            Set<String> currentDependencies = dependencyKeysFromList(dependencies);
+            Set<String> endpointPaths = endpointValues(endpointSurface, "path");
+            Set<String> endpointFiles = endpointValues(endpointSurface, "file_path");
+            Map<String, PriorAccumulator> priors = new LinkedHashMap<>();
+            for (String line : indexedPayloads(
+                    Set.of("finding_observed", "finding_feedback", "approved_rule"),
+                    MAX_INDEX_RECALL_ROWS)) {
+                try {
+                    collectPrior(job, relevantTypes, currentDependencies,
+                            endpointPaths, endpointFiles, teamFocus, priors, line);
+                } catch (Exception ignored) {
+                }
+            }
+            return Optional.of(priors.values().stream()
+                    .sorted(Comparator.comparingInt(PriorAccumulator::score).reversed())
+                    .limit(MAX_RECALL_PRIORS)
+                    .map(PriorAccumulator::toMap)
+                    .toList());
+        } catch (Exception ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<List<Map<String, Object>>> recallApprovedRulesFromIndex(
+            String hunter,
+            String teamFocus,
+            List<Map<String, Object>> endpointSurface,
+            List<Map<String, String>> dependencies
+    ) {
+        try {
+            ensureIndex();
+            String baseHunter = baseHunterName(hunter);
+            Set<String> relevantTypes = HUNTER_TYPES.getOrDefault(baseHunter, Set.of());
+            Set<String> currentDependencies = dependencyKeysFromList(dependencies);
+            Set<String> endpointPaths = endpointValues(endpointSurface, "path");
+            Set<String> endpointFiles = endpointValues(endpointSurface, "file_path");
+            List<Map<String, Object>> rules = new ArrayList<>();
+            for (String line : indexedPayloads(Set.of("approved_rule"), MAX_RECALL_LINES)) {
+                try {
+                    JsonNode node = objectMapper.readTree(line);
+                    String type = text(node, "vuln_type");
+                    if (!relevantTypes.isEmpty() && !relevantTypes.contains(type)) {
+                        continue;
+                    }
+                    int score = score(node, currentDependencies, endpointPaths,
+                            endpointFiles, teamFocus);
+                    if (score < MIN_RECALL_SCORE) {
+                        continue;
+                    }
+                    Map<String, Object> rule = new LinkedHashMap<>();
+                    rule.put("rule_id", text(node, "rule_id"));
+                    rule.put("vuln_type", type);
+                    rule.put("file_pattern", text(node, "file_pattern"));
+                    rule.put("http_path", text(node, "http_path"));
+                    rule.put("confidence_score", node.path("confidence_score").asDouble(0));
+                    rule.put("support_count", node.path("support_count").asInt(0));
+                    rule.put("match_score", score);
+                    rule.put("suggested_agent_guidance",
+                            text(node, "suggested_agent_guidance"));
+                    rule.put("decision_rationale", text(node, "decision_rationale"));
+                    rule.put("decision_reviewer", text(node, "decision_reviewer"));
+                    rule.put("decided_at", text(node, "decided_at"));
+                    rule.put("policy",
+                            "Approved rule guidance only; re-validate current source before reporting, suppressing or lowering severity.");
+                    rules.add(rule);
+                } catch (Exception ignored) {
+                }
+            }
+            return Optional.of(rules.stream()
+                    .sorted(Comparator
+                            .comparingInt((Map<String, Object> rule) ->
+                                    ((Number) rule.getOrDefault("match_score", 0)).intValue())
+                            .reversed()
+                            .thenComparing(rule -> rule.getOrDefault("rule_id", "").toString()))
+                    .limit(MAX_RECALL_PRIORS)
+                    .toList());
+        } catch (Exception ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private void indexEventBestEffort(
+            String sourceFile,
+            Map<String, Object> event
+    ) {
+        try {
+            ensureIndex();
+            try (Connection connection = openIndexConnection()) {
+                insertIndexedPayload(connection, sourceFile,
+                        objectMapper.writeValueAsString(event));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void reindexFileBestEffort(Path file, String sourceFile) {
+        try {
+            ensureIndex();
+            try (Connection connection = openIndexConnection()) {
+                deleteIndexedSource(connection, sourceFile);
+                for (String line : recentLines(file)) {
+                    insertIndexedPayload(connection, sourceFile, line);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void ensureIndex() throws Exception {
+        if (indexReady) {
+            return;
+        }
+        synchronized (indexLock) {
+            if (indexReady) {
+                return;
+            }
+            Files.createDirectories(indexFile.getParent());
+            try (Connection connection = openIndexConnection()) {
+                createIndexSchema(connection);
+                backfillIndex(connection, memoryFile, MEMORY_SOURCE);
+                backfillIndex(connection, feedbackFile, FEEDBACK_SOURCE);
+                backfillIndex(connection, ruleDecisionsFile, RULE_DECISIONS_SOURCE);
+                backfillIndex(connection, approvedRulesFile, APPROVED_RULES_SOURCE);
+                backfillIndex(connection, agentRunsFile, AGENT_RUNS_SOURCE);
+            }
+            indexReady = true;
+        }
+    }
+
+    private Connection openIndexConnection() throws SQLException {
+        Connection connection = DriverManager.getConnection(
+                "jdbc:sqlite:" + indexFile.toAbsolutePath().normalize());
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("PRAGMA busy_timeout=5000");
+        }
+        return connection;
+    }
+
+    private void createIndexSchema(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_file TEXT NOT NULL,
+                        line_hash TEXT NOT NULL UNIQUE,
+                        event_type TEXT,
+                        job_id TEXT,
+                        hunter TEXT,
+                        base_hunter TEXT,
+                        status TEXT,
+                        vuln_type TEXT,
+                        rule_id TEXT,
+                        file_path TEXT,
+                        http_path TEXT,
+                        feedback_verdict TEXT,
+                        learning_signal TEXT,
+                        recorded_at TEXT,
+                        dependency_keys TEXT,
+                        payload TEXT NOT NULL
+                    )
+                    """);
+            statement.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memory_event
+                    ON memory_events(event_type, id)
+                    """);
+            statement.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memory_lookup
+                    ON memory_events(vuln_type, rule_id, http_path, file_path)
+                    """);
+            statement.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memory_agent
+                    ON memory_events(event_type, hunter, base_hunter, status)
+                    """);
+        }
+    }
+
+    private void backfillIndex(
+            Connection connection,
+            Path file,
+            String sourceFile
+    ) throws Exception {
+        for (String line : recentLines(file)) {
+            insertIndexedPayload(connection, sourceFile, line);
+        }
+    }
+
+    private List<String> indexedPayloads(
+            Set<String> eventTypes,
+            int limit
+    ) throws Exception {
+        if (eventTypes == null || eventTypes.isEmpty()) {
+            return List.of();
+        }
+        String placeholders = String.join(",",
+                eventTypes.stream().map(ignored -> "?").toList());
+        String sql = "SELECT payload FROM memory_events WHERE event_type IN ("
+                + placeholders + ") ORDER BY id DESC LIMIT ?";
+        List<String> payloads = new ArrayList<>();
+        try (Connection connection = openIndexConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            int index = 1;
+            for (String eventType : eventTypes) {
+                statement.setString(index++, eventType);
+            }
+            statement.setInt(index, limit);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    payloads.add(resultSet.getString("payload"));
+                }
+            }
+        }
+        return payloads;
+    }
+
+    private void insertIndexedPayload(
+            Connection connection,
+            String sourceFile,
+            String payload
+    ) throws Exception {
+        if (payload == null || payload.isBlank()) {
+            return;
+        }
+        JsonNode node = objectMapper.readTree(payload);
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT OR IGNORE INTO memory_events (
+                    source_file, line_hash, event_type, job_id, hunter,
+                    base_hunter, status, vuln_type, rule_id, file_path,
+                    http_path, feedback_verdict, learning_signal, recorded_at,
+                    dependency_keys, payload
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)) {
+            statement.setString(1, sourceFile);
+            statement.setString(2, sha256(sourceFile + "\n" + payload));
+            statement.setString(3, text(node, "event_type"));
+            statement.setString(4, text(node, "job_id"));
+            statement.setString(5, text(node, "hunter"));
+            statement.setString(6, text(node, "base_hunter"));
+            statement.setString(7, text(node, "status"));
+            statement.setString(8, text(node, "vuln_type"));
+            statement.setString(9, text(node, "rule_id"));
+            statement.setString(10, text(node, "file_path"));
+            statement.setString(11, text(node, "http_path"));
+            statement.setString(12, text(node, "feedback_verdict"));
+            statement.setString(13, text(node, "learning_signal"));
+            statement.setString(14, text(node, "recorded_at"));
+            statement.setString(15, objectMapper.writeValueAsString(
+                    dependencyKeys(node.path("dependency_keys"))));
+            statement.setString(16, payload);
+            statement.executeUpdate();
+        }
+    }
+
+    private void deleteIndexedSource(
+            Connection connection,
+            String sourceFile
+    ) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM memory_events WHERE source_file = ?")) {
+            statement.setString(1, sourceFile);
+            statement.executeUpdate();
+        }
+    }
+
+    private boolean hasAnyRecallSource() {
+        return Files.isRegularFile(memoryFile)
+                || Files.isRegularFile(feedbackFile)
+                || Files.isRegularFile(approvedRulesFile);
+    }
+
+    private String sha256(String value) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hash = digest.digest(value.getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(hash);
     }
 
     private void collectPrior(
@@ -580,6 +903,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         Files.writeString(approvedRulesFile, lines.toString(),
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING);
+        reindexFileBestEffort(approvedRulesFile, APPROVED_RULES_SOURCE);
     }
 
     private void collectRuleCandidate(

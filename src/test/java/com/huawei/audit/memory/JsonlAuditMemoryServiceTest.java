@@ -62,6 +62,8 @@ class JsonlAuditMemoryServiceTest {
 
         Path jsonl = tempDir.resolve("audit-memory").resolve("findings.jsonl");
         assertThat(jsonl).isRegularFile();
+        assertThat(tempDir.resolve("audit-memory").resolve("memory-index.sqlite"))
+                .isRegularFile();
         assertThat(Files.readString(jsonl))
                 .contains("\"event_type\":\"finding_observed\"")
                 .contains("\"memory_policy\":\"historical-prior-only; revalidate from current source\"");
@@ -470,6 +472,48 @@ class JsonlAuditMemoryServiceTest {
         assertThat(priors)
                 .extracting(prior -> prior.get("rule_id"))
                 .doesNotContain("old-rule");
+    }
+
+    @Test
+    void recallCanUseSqliteIndexWhenJsonlSourceIsUnavailable() throws Exception {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        AuditJob job = new AuditJob("sqlite-prior1", "java");
+        memory.rememberFindings(
+                job,
+                tempDir.resolve("source"),
+                Map.of("dependencies", List.of()),
+                List.of(Map.of(
+                        "rule_id", "path-read",
+                        "vuln_type", "PATH_TRAVERSAL",
+                        "verdict", "CONFIRM",
+                        "file_path", "src/main/java/demo/FileController.java",
+                        "http_path", "/file"
+                ))
+        );
+
+        Path jsonl = tempDir.resolve("audit-memory").resolve("findings.jsonl");
+        Path sqlite = tempDir.resolve("audit-memory").resolve("memory-index.sqlite");
+        assertThat(sqlite).isRegularFile();
+        Files.delete(jsonl);
+
+        var priors = memory.recallPriors(
+                new AuditJob("sqlite-prior2", "java"),
+                "file_operations",
+                "general",
+                List.of(Map.of(
+                        "path", "/file",
+                        "file_path", "src/main/java/demo/FileController.java"
+                )),
+                List.of()
+        );
+
+        assertThat(priors).singleElement().satisfies(prior ->
+                assertThat(prior)
+                        .containsEntry("vuln_type", "PATH_TRAVERSAL")
+                        .containsEntry("rule_id", "path-read"));
     }
 
     private AuditProperties properties() {
