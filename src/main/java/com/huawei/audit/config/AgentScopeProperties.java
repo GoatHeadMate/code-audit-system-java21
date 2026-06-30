@@ -10,7 +10,8 @@ public record AgentScopeProperties(
         String apiKey,
         String baseUrl,
         int maxIters,
-        Duration timeout
+        Duration timeout,
+        Duration idleTimeout
 ) {
     public AgentScopeProperties {
         provider = blankDefault(provider, "anthropic").toLowerCase();
@@ -19,6 +20,9 @@ public record AgentScopeProperties(
         baseUrl = baseUrl == null ? "" : baseUrl.strip();
         maxIters = maxIters <= 0 ? 80 : Math.min(maxIters, 200);
         timeout = timeout == null ? Duration.ofMinutes(30) : timeout;
+        idleTimeout = idleTimeout == null || idleTimeout.isZero() || idleTimeout.isNegative()
+                ? Duration.ofMinutes(5)
+                : idleTimeout;
     }
 
     public boolean configured() {

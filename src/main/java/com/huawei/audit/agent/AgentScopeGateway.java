@@ -16,6 +16,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,6 +105,11 @@ public class AgentScopeGateway implements ClaudeGateway {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
                     .doOnNext(events::handle)
+                    .timeout(properties.idleTimeout())
+                    .doOnError(TimeoutException.class, error ->
+                            eventConsumer.accept("[supervisor-agent] AgentScope idle timeout after "
+                                    + properties.idleTimeout()
+                                    + " without stream events; failing this hunter session"))
                     .blockLast(supervisorTotalTimeout(declarations));
         } finally {
             events.flushAll();
