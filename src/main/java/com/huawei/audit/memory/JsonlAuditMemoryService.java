@@ -52,6 +52,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
 
     private final ObjectMapper objectMapper;
     private final Path memoryFile;
+    private final Path feedbackFile;
 
     public JsonlAuditMemoryService(
             ObjectMapper objectMapper,
@@ -61,6 +62,61 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         this.memoryFile = properties.absoluteWorkspace()
                 .resolve("audit-memory")
                 .resolve("findings.jsonl");
+        this.feedbackFile = properties.absoluteWorkspace()
+                .resolve("audit-memory")
+                .resolve("feedback.jsonl");
+    }
+
+    @Override
+    public synchronized void rememberFeedback(
+            AuditJob job,
+            int findingIndex,
+            Map<String, Object> finding,
+            String verdict,
+            String rationale,
+            String reviewer
+    ) {
+        if (job == null || finding == null || finding.isEmpty()) {
+            return;
+        }
+        String normalizedVerdict = normalizeFeedbackVerdict(verdict);
+        if (normalizedVerdict.isBlank()) {
+            return;
+        }
+        try {
+            Files.createDirectories(feedbackFile.getParent());
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("schema_version", SCHEMA_VERSION);
+            event.put("event_type", "finding_feedback");
+            event.put("recorded_at", Instant.now().toString());
+            event.put("job_id", job.jobId());
+            event.put("finding_index", findingIndex);
+            event.put("feedback_verdict", normalizedVerdict);
+            event.put("feedback_rationale", safeText(rationale));
+            event.put("reviewer", safeText(reviewer));
+            event.put("lang", job.lang());
+            event.put("source_type", job.sourceType());
+            event.put("git_url", job.gitUrl());
+            event.put("cache_key", job.cacheKey());
+            event.put("dependency_keys", dependencyKeys(job.techProfile()));
+            copy(event, finding, "rule_id");
+            copy(event, finding, "vuln_type");
+            copy(event, finding, "title");
+            copy(event, finding, "severity");
+            copy(event, finding, "confidence");
+            copy(event, finding, "file_path");
+            copy(event, finding, "start_line");
+            copy(event, finding, "http_method");
+            copy(event, finding, "http_path");
+            copy(event, finding, "discovered_by");
+            event.put("memory_policy",
+                    "feedback-prior-only; revalidate from current source");
+            Files.writeString(feedbackFile,
+                    objectMapper.writeValueAsString(event) + System.lineSeparator(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -129,7 +185,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             List<Map<String, Object>> endpointSurface,
             List<Map<String, String>> dependencies
     ) {
-        if (!Files.isRegularFile(memoryFile)) {
+        if (!Files.isRegularFile(memoryFile) && !Files.isRegularFile(feedbackFile)) {
             return List.of();
         }
         try {
@@ -140,31 +196,13 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             Set<String> endpointFiles = endpointValues(endpointSurface, "file_path");
             Map<String, PriorAccumulator> priors = new LinkedHashMap<>();
 
-            for (String line : recentLines()) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                JsonNode node = objectMapper.readTree(line);
-                if (job != null && job.jobId().equals(text(node, "job_id"))) {
-                    continue;
-                }
-                String type = text(node, "vuln_type");
-                if (!relevantTypes.isEmpty() && !relevantTypes.contains(type)) {
-                    continue;
-                }
-                int score = score(node, currentDependencies, endpointPaths,
-                        endpointFiles, teamFocus);
-                if (score < MIN_RECALL_SCORE) {
-                    continue;
-                }
-                String key = String.join("|",
-                        type,
-                        text(node, "rule_id"),
-                        fileName(text(node, "file_path")),
-                        text(node, "http_path"));
-                priors.computeIfAbsent(key, ignored ->
-                        new PriorAccumulator(type, text(node, "rule_id")))
-                        .add(node, score);
+            for (String line : recentLines(memoryFile)) {
+                collectPrior(job, relevantTypes, currentDependencies,
+                        endpointPaths, endpointFiles, teamFocus, priors, line);
+            }
+            for (String line : recentLines(feedbackFile)) {
+                collectPrior(job, relevantTypes, currentDependencies,
+                        endpointPaths, endpointFiles, teamFocus, priors, line);
             }
 
             return priors.values().stream()
@@ -175,6 +213,42 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         } catch (Exception ignored) {
             return List.of();
         }
+    }
+
+    private void collectPrior(
+            AuditJob job,
+            Set<String> relevantTypes,
+            Set<String> currentDependencies,
+            Set<String> endpointPaths,
+            Set<String> endpointFiles,
+            String teamFocus,
+            Map<String, PriorAccumulator> priors,
+            String line
+    ) throws Exception {
+        if (line.isBlank()) {
+            return;
+        }
+        JsonNode node = objectMapper.readTree(line);
+        if (job != null && job.jobId().equals(text(node, "job_id"))) {
+            return;
+        }
+        String type = text(node, "vuln_type");
+        if (!relevantTypes.isEmpty() && !relevantTypes.contains(type)) {
+            return;
+        }
+        int score = score(node, currentDependencies, endpointPaths,
+                endpointFiles, teamFocus);
+        if (score < MIN_RECALL_SCORE) {
+            return;
+        }
+        String key = String.join("|",
+                type,
+                text(node, "rule_id"),
+                fileName(text(node, "file_path")),
+                text(node, "http_path"));
+        priors.computeIfAbsent(key, ignored ->
+                new PriorAccumulator(type, text(node, "rule_id")))
+                .add(node, score);
     }
 
     private boolean shouldRemember(Map<String, Object> finding) {
@@ -215,12 +289,34 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         return score;
     }
 
-    private List<String> recentLines() throws Exception {
-        List<String> lines = Files.readAllLines(memoryFile);
+    private List<String> recentLines(Path file) throws Exception {
+        if (!Files.isRegularFile(file)) {
+            return List.of();
+        }
+        List<String> lines = Files.readAllLines(file);
         if (lines.size() <= MAX_RECALL_LINES) {
             return lines;
         }
         return lines.subList(lines.size() - MAX_RECALL_LINES, lines.size());
+    }
+
+    private String normalizeFeedbackVerdict(String verdict) {
+        String normalized = normalize(verdict);
+        return switch (normalized) {
+            case "CONFIRM", "CONFIRMED", "TRUE_POSITIVE" -> "CONFIRM";
+            case "FALSE_POSITIVE", "SUPPRESS", "SUPPRESSED" -> "FALSE_POSITIVE";
+            case "NEEDS_REVIEW", "REVIEW" -> "NEEDS_REVIEW";
+            default -> "";
+        };
+    }
+
+    private String safeText(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value.replace("\r", " ")
+                .replace("\n", " ")
+                .strip();
     }
 
     private List<String> dependencyKeys(Map<String, Object> techProfile) {
@@ -363,6 +459,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         private final String ruleId;
         private final List<Map<String, Object>> examples = new ArrayList<>();
         private int score;
+        private int falsePositiveFeedback;
+        private int confirmFeedback;
+        private int reviewFeedback;
 
         PriorAccumulator(String vulnType, String ruleId) {
             this.vulnType = vulnType;
@@ -371,12 +470,22 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
 
         void add(JsonNode node, int matchScore) {
             score += matchScore;
+            String feedback = textStatic(node, "feedback_verdict");
+            if ("FALSE_POSITIVE".equals(feedback)) {
+                falsePositiveFeedback++;
+            } else if ("CONFIRM".equals(feedback)) {
+                confirmFeedback++;
+            } else if ("NEEDS_REVIEW".equals(feedback)) {
+                reviewFeedback++;
+            }
             examples.add(Map.of(
                     "job_id", textStatic(node, "job_id"),
                     "file_path", textStatic(node, "file_path"),
                     "start_line", textStatic(node, "start_line"),
                     "http_path", textStatic(node, "http_path"),
                     "title", textStatic(node, "title"),
+                    "feedback_verdict", feedback,
+                    "feedback_rationale", textStatic(node, "feedback_rationale"),
                     "recorded_at", textStatic(node, "recorded_at")
             ));
             examples.sort(Comparator.comparing(example ->
@@ -389,16 +498,43 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
 
         Map<String, Object> toMap() {
             Map<String, Object> prior = new LinkedHashMap<>();
-            prior.put("kind", "HISTORICAL_FINDING_PRIOR");
+            prior.put("kind", kind());
             prior.put("vuln_type", vulnType);
             prior.put("rule_id", ruleId);
             prior.put("support_count", examples.size());
+            prior.put("feedback_summary", Map.of(
+                    "false_positive", falsePositiveFeedback,
+                    "confirm", confirmFeedback,
+                    "needs_review", reviewFeedback
+            ));
             prior.put("examples", examples.stream()
                     .skip(Math.max(0, examples.size() - 3))
                     .toList());
-            prior.put("policy",
-                    "Prior only: use as attention guidance; re-validate from current source before reporting.");
+            prior.put("policy", policy());
             return prior;
+        }
+
+        private String kind() {
+            if (falsePositiveFeedback > 0 && confirmFeedback == 0) {
+                return "HISTORICAL_FALSE_POSITIVE_PRIOR";
+            }
+            if (confirmFeedback > 0 && falsePositiveFeedback == 0) {
+                return "HISTORICAL_CONFIRMED_PRIOR";
+            }
+            if (falsePositiveFeedback > 0 || confirmFeedback > 0 || reviewFeedback > 0) {
+                return "HISTORICAL_FEEDBACK_PRIOR";
+            }
+            return "HISTORICAL_FINDING_PRIOR";
+        }
+
+        private String policy() {
+            if (falsePositiveFeedback > 0 && confirmFeedback == 0) {
+                return "Prior only: historical false-positive feedback exists; verify whether the same mitigation or reachability break exists in current source before suppressing.";
+            }
+            if (confirmFeedback > 0 && falsePositiveFeedback == 0) {
+                return "Prior only: historical confirmation exists; re-validate attacker control, impact and missing mitigation from current source before reporting.";
+            }
+            return "Prior only: use as attention guidance; re-validate from current source before reporting.";
         }
 
         private static String textStatic(JsonNode node, String key) {

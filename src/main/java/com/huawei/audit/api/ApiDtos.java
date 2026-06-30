@@ -36,6 +36,19 @@ public final class ApiDtos {
         }
     }
 
+    public record FindingFeedbackRequest(
+            String verdict,
+            String rationale,
+            String reviewer
+    ) { }
+
+    public record FindingFeedbackResponse(
+            String jobId,
+            int findingIndex,
+            String verdict,
+            String message
+    ) { }
+
     public record JobStatusResponse(
             String jobId,
             String status,

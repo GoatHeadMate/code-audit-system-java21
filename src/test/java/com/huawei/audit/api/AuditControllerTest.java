@@ -11,12 +11,14 @@ import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.AuditJobStore;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import com.huawei.audit.orchestrator.AuditOrchestrator;
 import com.huawei.audit.source.InterfaceInventoryService;
 import com.huawei.audit.source.SourceWorkspaceService;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -118,11 +120,76 @@ class AuditControllerTest {
         assertThat(job.submitted()).isFalse();
     }
 
+    @Test
+    void recordsFindingFeedbackAsAuditMemory() {
+        AuditJobStore jobs = mock(AuditJobStore.class);
+        SourceWorkspaceService sources = mock(SourceWorkspaceService.class);
+        InterfaceInventoryService inventory = mock(
+                InterfaceInventoryService.class
+        );
+        AuditOrchestrator orchestrator = mock(AuditOrchestrator.class);
+        AuditMemoryService memory = mock(AuditMemoryService.class);
+        AuditJob job = new AuditJob("feedback1", "java");
+        job.findings(List.of(Map.of(
+                "rule_id", "ssrf-1",
+                "vuln_type", "SSRF",
+                "file_path", "Proxy.java",
+                "start_line", 12
+        )));
+        job.setStatus(com.huawei.audit.domain.JobStatus.DONE);
+
+        when(jobs.find(job.jobId())).thenReturn(Optional.of(job));
+
+        AuditController controller = controller(
+                jobs,
+                sources,
+                inventory,
+                orchestrator,
+                memory
+        );
+
+        var response = controller.findingFeedback(
+                job.jobId(),
+                0,
+                new ApiDtos.FindingFeedbackRequest(
+                        "false_positive",
+                        "URL is restricted by a strict allowlist",
+                        "reviewer"
+                )
+        );
+
+        assertThat(response.verdict()).isEqualTo("FALSE_POSITIVE");
+        verify(memory).rememberFeedback(
+                job,
+                0,
+                job.findings().getFirst(),
+                "FALSE_POSITIVE",
+                "URL is restricted by a strict allowlist",
+                "reviewer"
+        );
+    }
+
     private AuditController controller(
             AuditJobStore jobs,
             SourceWorkspaceService sources,
             InterfaceInventoryService inventory,
             AuditOrchestrator orchestrator
+    ) {
+        return controller(
+                jobs,
+                sources,
+                inventory,
+                orchestrator,
+                mock(AuditMemoryService.class)
+        );
+    }
+
+    private AuditController controller(
+            AuditJobStore jobs,
+            SourceWorkspaceService sources,
+            InterfaceInventoryService inventory,
+            AuditOrchestrator orchestrator,
+            AuditMemoryService memory
     ) {
         return new AuditController(
                 jobs,
@@ -131,7 +198,8 @@ class AuditControllerTest {
                 inventory,
                 orchestrator,
                 mock(ClaudeGateway.class),
-                new OrchestratorProperties(true, 10, 5, 80)
+                new OrchestratorProperties(true, 10, 5, 80),
+                memory
         );
     }
 

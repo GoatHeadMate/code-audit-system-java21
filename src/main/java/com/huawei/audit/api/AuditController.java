@@ -1,6 +1,8 @@
 package com.huawei.audit.api;
 
 import com.huawei.audit.api.ApiDtos.FindingsResponse;
+import com.huawei.audit.api.ApiDtos.FindingFeedbackRequest;
+import com.huawei.audit.api.ApiDtos.FindingFeedbackResponse;
 import com.huawei.audit.api.ApiDtos.InterfaceOption;
 import com.huawei.audit.api.ApiDtos.InterfacePreviewResponse;
 import com.huawei.audit.api.ApiDtos.JobListResponse;
@@ -13,6 +15,7 @@ import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.domain.JobStatus;
 import com.huawei.audit.job.AuditJobStore;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import com.huawei.audit.orchestrator.AuditOrchestrator;
 import com.huawei.audit.source.SourceWorkspaceService;
 import com.huawei.audit.source.InterfaceInventoryService;
@@ -20,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -46,6 +50,7 @@ public class AuditController {
     private final AuditOrchestrator orchestrator;
     private final ClaudeGateway claudeGateway;
     private final OrchestratorProperties orchestratorProperties;
+    private final AuditMemoryService auditMemory;
 
     public AuditController(
             AuditJobStore jobs,
@@ -54,7 +59,8 @@ public class AuditController {
             InterfaceInventoryService interfaceInventory,
             AuditOrchestrator orchestrator,
             ClaudeGateway claudeGateway,
-            OrchestratorProperties orchestratorProperties
+            OrchestratorProperties orchestratorProperties,
+            AuditMemoryService auditMemory
     ) {
         this.jobs = jobs;
         this.logs = logs;
@@ -63,6 +69,7 @@ public class AuditController {
         this.orchestrator = orchestrator;
         this.claudeGateway = claudeGateway;
         this.orchestratorProperties = orchestratorProperties;
+        this.auditMemory = auditMemory;
     }
 
     @PostMapping(
@@ -215,6 +222,53 @@ public class AuditController {
         return ResponseEntity.ok(FindingsResponse.from(job));
     }
 
+    @PostMapping(
+            path = "/audit/{jobId}/findings/{findingIndex}/feedback",
+            consumes = MediaType.APPLICATION_JSON_VALUE
+    )
+    public FindingFeedbackResponse findingFeedback(
+            @PathVariable String jobId,
+            @PathVariable int findingIndex,
+            @RequestBody FindingFeedbackRequest request
+    ) {
+        AuditJob job = requireJob(jobId);
+        if (job.status() != JobStatus.DONE && job.status() != JobStatus.FAILED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "audit findings are not final"
+            );
+        }
+        if (findingIndex < 0 || findingIndex >= job.findings().size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "finding index out of range"
+            );
+        }
+        String verdict = normalizeFeedbackVerdict(request == null
+                ? null
+                : request.verdict());
+        if (verdict.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "verdict must be CONFIRM, FALSE_POSITIVE or NEEDS_REVIEW"
+            );
+        }
+        auditMemory.rememberFeedback(
+                job,
+                findingIndex,
+                job.findings().get(findingIndex),
+                verdict,
+                request == null ? "" : request.rationale(),
+                request == null ? "" : request.reviewer()
+        );
+        return new FindingFeedbackResponse(
+                job.jobId(),
+                findingIndex,
+                verdict,
+                "feedback recorded as audit memory prior"
+        );
+    }
+
     @GetMapping(
             path = "/audit/{jobId}/logs",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE
@@ -244,6 +298,18 @@ public class AuditController {
                 HttpStatus.NOT_FOUND,
                 "job not found: " + jobId
         ));
+    }
+
+    private String normalizeFeedbackVerdict(String verdict) {
+        if (verdict == null || verdict.isBlank()) {
+            return "";
+        }
+        return switch (verdict.strip().toUpperCase(Locale.ROOT).replace('-', '_')) {
+            case "CONFIRM", "CONFIRMED", "TRUE_POSITIVE" -> "CONFIRM";
+            case "FALSE_POSITIVE", "SUPPRESS", "SUPPRESSED" -> "FALSE_POSITIVE";
+            case "NEEDS_REVIEW", "REVIEW" -> "NEEDS_REVIEW";
+            default -> "";
+        };
     }
 
     private void configureSource(

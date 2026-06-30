@@ -35,6 +35,16 @@ public interface AuditMemoryService {
             List<Map<String, Object>> findings
     );
 
+    default void rememberFeedback(
+            AuditJob job,
+            int findingIndex,
+            Map<String, Object> finding,
+            String verdict,
+            String rationale,
+            String reviewer
+    ) {
+    }
+
     List<Map<String, Object>> recallPriors(
             AuditJob job,
             String hunter,

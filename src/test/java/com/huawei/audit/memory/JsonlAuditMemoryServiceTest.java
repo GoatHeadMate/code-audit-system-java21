@@ -130,6 +130,67 @@ class JsonlAuditMemoryServiceTest {
     }
 
     @Test
+    void recallsFalsePositiveFeedbackAsPriorOnly() throws Exception {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        AuditJob job = new AuditJob("feedback-memory1", "java");
+        job.techProfile(Map.of(
+                "dependencies",
+                List.of(Map.of(
+                        "group_id", "org.springframework",
+                        "artifact_id", "spring-web"
+                ))
+        ));
+        Map<String, Object> finding = Map.of(
+                "rule_id", "ssrf-allowlist",
+                "vuln_type", "SSRF",
+                "file_path", "src/main/java/demo/ProxyController.java",
+                "http_path", "/proxy"
+        );
+
+        memory.rememberFeedback(
+                job,
+                0,
+                finding,
+                "FALSE_POSITIVE",
+                "Strict host allowlist blocks attacker URLs",
+                "expert"
+        );
+
+        Path feedback = tempDir.resolve("audit-memory").resolve("feedback.jsonl");
+        assertThat(feedback).isRegularFile();
+        assertThat(Files.readString(feedback))
+                .contains("\"event_type\":\"finding_feedback\"")
+                .contains("\"feedback_verdict\":\"FALSE_POSITIVE\"");
+
+        var priors = memory.recallPriors(
+                new AuditJob("feedback-memory2", "java"),
+                "ssrf",
+                "general",
+                List.of(Map.of(
+                        "path", "/proxy",
+                        "file_path", "src/main/java/demo/ProxyController.java"
+                )),
+                List.of(Map.of(
+                        "group_id", "org.springframework",
+                        "artifact_id", "spring-web"
+                ))
+        );
+
+        assertThat(priors).singleElement().satisfies(prior -> {
+            assertThat(prior)
+                    .containsEntry("kind", "HISTORICAL_FALSE_POSITIVE_PRIOR")
+                    .containsEntry("vuln_type", "SSRF")
+                    .containsEntry("rule_id", "ssrf-allowlist");
+            assertThat(prior.get("policy").toString())
+                    .contains("historical false-positive feedback")
+                    .contains("current source");
+        });
+    }
+
+    @Test
     void recallReadsOnlyRecentMemoryLines() throws Exception {
         JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
                 new ObjectMapper(),
