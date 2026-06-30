@@ -254,6 +254,7 @@
         <button id="tabLogs"     class="tab on"  onclick="showTab('Logs')">实时日志</button>
         <button id="tabFindings" class="tab"     onclick="showTab('Findings')">漏洞发现</button>
         <button id="tabSummary"  class="tab"     onclick="showTab('Summary')">摘要</button>
+        <button id="tabRules"    class="tab"     onclick="showTab('Rules')">审计规则</button>
       </div>
 
       <!-- Log panel -->
@@ -272,6 +273,11 @@
       <!-- Summary panel -->
       <div id="panelSummary" class="hidden flex-1 overflow-y-auto p-5">
         <div id="summaryBody" class="text-sm text-slate-400 text-center py-12">等待审计完成…</div>
+      </div>
+
+      <!-- Rule candidates panel (human gate) -->
+      <div id="panelRules" class="hidden flex-1 overflow-y-auto p-5">
+        <div id="rulesBody" class="text-sm text-slate-400 text-center py-12">加载审计规则候选…</div>
       </div>
     </div>
   </main>
@@ -799,6 +805,23 @@ function onScroll(el) {
 }
 
 // ── Findings ───────────────────────────────────────────────────────
+async function sendFeedback(idx, verdict, btn) {
+  if (!selId) return;
+  const wrap = btn.closest('.feedback-actions');
+  try {
+    const r = await fetch(`/audit/${selId}/findings/${idx}/feedback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verdict, reviewer: 'ui' })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const label = { CONFIRM:'已确认漏洞', FALSE_POSITIVE:'已标记误报', NEEDS_REVIEW:'已标记待复核' }[verdict] || verdict;
+    if (wrap) wrap.innerHTML = `<span class="text-xs text-emerald-600 font-medium">${label}（已记入审计记忆）</span>`;
+  } catch (e) {
+    if (wrap) wrap.insertAdjacentHTML('beforeend', `<span class="text-xs text-red-500 ml-1">提交失败，请重试</span>`);
+  }
+}
+
 async function loadFindings(id) {
   try {
     const r = await fetch(`/audit/${id}/findings`);
@@ -822,10 +845,10 @@ function renderFindings({ findings=[] }) {
     <div class="mb-4 text-sm text-slate-500">
       共 <strong class="text-slate-800">${findings.length}</strong> 个漏洞
     </div>
-    <div class="space-y-3">${findings.map(mkFinding).join('')}</div>`;
+    <div class="space-y-3">${findings.map((f, i) => mkFinding(f, i)).join('')}</div>`;
 }
 
-function mkFinding(f) {
+function mkFinding(f, idx) {
   const sev   = (f.severity||'UNKNOWN').toUpperCase();
   const conf  = (f.confidence||'').toString().toUpperCase();
   const fname = (f.file_path||'').replace(/\\/g,'/').split('/').pop();
@@ -930,6 +953,14 @@ function mkFinding(f) {
         </div>
         ${f.discovered_by?`<span>发现者: ${esc(f.discovered_by)}</span>`:''}
         ${f.discovery_source?`<span>${esc(f.discovery_source)}</span>`:''}
+      </div>
+
+      <!-- Feedback actions -->
+      <div class="feedback-actions flex items-center flex-wrap gap-2 mt-3 pt-2 border-t border-slate-100">
+        <span class="text-xs text-slate-400">这条结果：</span>
+        <button onclick="sendFeedback(${idx},'CONFIRM',this)" class="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">确认漏洞</button>
+        <button onclick="sendFeedback(${idx},'FALSE_POSITIVE',this)" class="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors">误报</button>
+        <button onclick="sendFeedback(${idx},'NEEDS_REVIEW',this)" class="text-xs px-2 py-1 rounded border border-amber-200 text-amber-600 hover:bg-amber-50 transition-colors">待复核</button>
       </div>
     </div>`;
 }
@@ -1047,11 +1078,88 @@ function renderSummary({ stats={}, tech_profile={}, task_summary={} }) {
 }
 
 // ── Tabs ───────────────────────────────────────────────────────────
+// ── Rule candidates (human gate) ───────────────────────────────────
+async function loadRuleCandidates() {
+  const el = document.getElementById('rulesBody');
+  try {
+    const r = await fetch('/audit/rule-candidates');
+    if (!r.ok) { el.innerHTML = '<div class="py-12 text-center text-sm text-red-500">加载失败</div>'; return; }
+    const data = await r.json();
+    renderRuleCandidates(data.candidates || []);
+  } catch {
+    el.innerHTML = '<div class="py-12 text-center text-sm text-red-500">加载失败</div>';
+  }
+}
+
+function renderRuleCandidates(candidates) {
+  const el = document.getElementById('rulesBody');
+  if (!candidates.length) {
+    el.innerHTML = `<div class="py-16 text-center">
+      <div class="text-sm text-slate-400">暂无规则候选（审计与反馈积累后自动生成）</div></div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="mb-4 text-sm text-slate-500">共 <strong class="text-slate-800">${candidates.length}</strong> 条规则候选 · 批准后作为更高权重先验注入（仍要求从当前源码复验）</div>
+    <div class="space-y-3">${candidates.map(mkRuleCandidate).join('')}</div>`;
+}
+
+function mkRuleCandidate(c) {
+  const id     = c.candidate_id || '';
+  const status = (c.status || 'CANDIDATE').toUpperCase();
+  const vtype  = c.vuln_type || '';
+  const conf   = c.confidence_score;
+  const statusCls = {
+    APPROVED:'text-emerald-700 bg-emerald-50 border-emerald-200',
+    REJECTED:'text-red-600 bg-red-50 border-red-200',
+    DISCARDED:'text-slate-400 bg-slate-50 border-slate-200',
+    CANDIDATE:'text-amber-600 bg-amber-50 border-amber-200'
+  }[status] || 'text-slate-500 bg-slate-100 border-slate-200';
+  return `
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="flex items-start justify-between gap-2 mb-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs px-2 py-0.5 rounded-full border font-medium ${statusCls}">${esc(status)}</span>
+          <span class="text-xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">${esc(vtype.replace(/_/g,' '))}</span>
+          <code class="text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">${esc(c.rule_id||'')}</code>
+        </div>
+        <div class="text-xs text-slate-400">置信度 <span class="font-medium text-slate-600">${conf==null?'-':esc(String(conf))}</span></div>
+      </div>
+      <div class="text-xs text-slate-500 mb-3 flex flex-wrap gap-x-4 gap-y-1">
+        <span>文件: <code class="font-mono">${esc(c.file_pattern||'-')}</code></span>
+        ${c.http_path?`<span>路径: <code class="font-mono">${esc(c.http_path)}</code></span>`:''}
+        <span>观察 ${c.observed_finding_count??0} · 确认 ${c.confirm_count??0} · 误报 ${c.false_positive_count??0}</span>
+      </div>
+      <div class="rule-actions flex items-center gap-2">
+        <button onclick="decideRule('${esc(id)}','APPROVE',this)" class="text-xs px-2.5 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">批准</button>
+        <button onclick="decideRule('${esc(id)}','REJECT',this)" class="text-xs px-2.5 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors">拒绝</button>
+        <button onclick="decideRule('${esc(id)}','DISCARD',this)" class="text-xs px-2.5 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">废弃</button>
+      </div>
+    </div>`;
+}
+
+async function decideRule(id, decision, btn) {
+  const wrap = btn.closest('.rule-actions');
+  try {
+    const r = await fetch(`/audit/rule-candidates/${encodeURIComponent(id)}/decision`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, reviewer: 'ui' })
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const label = { APPROVED:'已批准（将作为先验回流）', REJECTED:'已拒绝', DISCARDED:'已废弃' }[data.status] || data.status;
+    if (wrap) wrap.innerHTML = `<span class="text-xs text-emerald-600 font-medium">${label}</span>`;
+  } catch (e) {
+    if (wrap) wrap.insertAdjacentHTML('beforeend', `<span class="text-xs text-red-500 ml-1">操作失败，请重试</span>`);
+  }
+}
+
 function showTab(name) {
-  ['Logs','Findings','Summary'].forEach(t => {
+  ['Logs','Findings','Summary','Rules'].forEach(t => {
     document.getElementById(`panel${t}`).classList.toggle('hidden', t!==name);
     document.getElementById(`tab${t}`).classList.toggle('on', t===name);
   });
+  if (name === 'Rules') loadRuleCandidates();
 }
 
 // ── Badge helpers ──────────────────────────────────────────────────
