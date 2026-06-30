@@ -53,6 +53,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
     private final ObjectMapper objectMapper;
     private final Path memoryFile;
     private final Path feedbackFile;
+    private final Path ruleCandidatesFile;
 
     public JsonlAuditMemoryService(
             ObjectMapper objectMapper,
@@ -65,6 +66,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         this.feedbackFile = properties.absoluteWorkspace()
                 .resolve("audit-memory")
                 .resolve("feedback.jsonl");
+        this.ruleCandidatesFile = properties.absoluteWorkspace()
+                .resolve("audit-memory")
+                .resolve("rule-candidates.jsonl");
     }
 
     @Override
@@ -115,6 +119,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     objectMapper.writeValueAsString(event) + System.lineSeparator(),
                     StandardOpenOption.CREATE,
                     StandardOpenOption.APPEND);
+            refreshRuleCandidates();
         } catch (Exception ignored) {
         }
     }
@@ -172,6 +177,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 Files.writeString(memoryFile, lines.toString(),
                         StandardOpenOption.CREATE,
                         StandardOpenOption.APPEND);
+                refreshRuleCandidates();
             }
         } catch (Exception ignored) {
         }
@@ -298,6 +304,58 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             return lines;
         }
         return lines.subList(lines.size() - MAX_RECALL_LINES, lines.size());
+    }
+
+    private void refreshRuleCandidates() throws Exception {
+        Map<String, RuleCandidateAccumulator> candidates = new LinkedHashMap<>();
+        for (String line : recentLines(memoryFile)) {
+            collectRuleCandidate(candidates, line);
+        }
+        for (String line : recentLines(feedbackFile)) {
+            collectRuleCandidate(candidates, line);
+        }
+        List<Map<String, Object>> output = candidates.values().stream()
+                .filter(RuleCandidateAccumulator::shouldEmit)
+                .sorted(Comparator
+                        .comparingDouble(RuleCandidateAccumulator::confidenceScore)
+                        .reversed()
+                        .thenComparing(RuleCandidateAccumulator::candidateId))
+                .map(RuleCandidateAccumulator::toMap)
+                .toList();
+        Files.createDirectories(ruleCandidatesFile.getParent());
+        StringBuilder lines = new StringBuilder();
+        for (Map<String, Object> candidate : output) {
+            lines.append(objectMapper.writeValueAsString(candidate))
+                    .append(System.lineSeparator());
+        }
+        Files.writeString(ruleCandidatesFile, lines.toString(),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING);
+    }
+
+    private void collectRuleCandidate(
+            Map<String, RuleCandidateAccumulator> candidates,
+            String line
+    ) throws Exception {
+        if (line.isBlank()) {
+            return;
+        }
+        JsonNode node = objectMapper.readTree(line);
+        String type = text(node, "vuln_type");
+        String ruleId = text(node, "rule_id");
+        if (type.isBlank() || ruleId.isBlank() || "ATTACK_CHAIN".equals(type)) {
+            return;
+        }
+        String key = String.join("|",
+                type,
+                ruleId,
+                fileName(text(node, "file_path")),
+                text(node, "http_path"));
+        candidates.computeIfAbsent(key, ignored ->
+                new RuleCandidateAccumulator(type, ruleId,
+                        fileName(text(node, "file_path")),
+                        text(node, "http_path")))
+                .add(node);
     }
 
     private String normalizeFeedbackVerdict(String verdict) {
@@ -535,6 +593,134 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 return "Prior only: historical confirmation exists; re-validate attacker control, impact and missing mitigation from current source before reporting.";
             }
             return "Prior only: use as attention guidance; re-validate from current source before reporting.";
+        }
+
+        private static String textStatic(JsonNode node, String key) {
+            JsonNode value = node.path(key);
+            return value.isMissingNode() || value.isNull() ? "" : value.asText("");
+        }
+    }
+
+    private static final class RuleCandidateAccumulator {
+        private final String vulnType;
+        private final String ruleId;
+        private final String filePattern;
+        private final String httpPath;
+        private final Set<String> jobs = new LinkedHashSet<>();
+        private final List<Map<String, Object>> provenance = new ArrayList<>();
+        private int findingSupport;
+        private int confirmFeedback;
+        private int falsePositiveFeedback;
+        private int needsReviewFeedback;
+
+        RuleCandidateAccumulator(
+                String vulnType,
+                String ruleId,
+                String filePattern,
+                String httpPath
+        ) {
+            this.vulnType = vulnType;
+            this.ruleId = ruleId;
+            this.filePattern = filePattern;
+            this.httpPath = httpPath;
+        }
+
+        void add(JsonNode node) {
+            String jobId = textStatic(node, "job_id");
+            if (!jobId.isBlank()) {
+                jobs.add(jobId);
+            }
+            String eventType = textStatic(node, "event_type");
+            String feedback = textStatic(node, "feedback_verdict");
+            if ("finding_observed".equals(eventType)) {
+                findingSupport++;
+            }
+            if ("CONFIRM".equals(feedback)) {
+                confirmFeedback++;
+            } else if ("FALSE_POSITIVE".equals(feedback)) {
+                falsePositiveFeedback++;
+            } else if ("NEEDS_REVIEW".equals(feedback)) {
+                needsReviewFeedback++;
+            }
+            if (provenance.size() < 5) {
+                provenance.add(Map.of(
+                        "job_id", jobId,
+                        "event_type", eventType,
+                        "feedback_verdict", feedback,
+                        "file_path", textStatic(node, "file_path"),
+                        "start_line", textStatic(node, "start_line"),
+                        "http_path", textStatic(node, "http_path"),
+                        "recorded_at", textStatic(node, "recorded_at")
+                ));
+            }
+        }
+
+        boolean shouldEmit() {
+            return positiveSupportCount() >= 2
+                    || confirmFeedback > 0
+                    || falsePositiveFeedback > 0;
+        }
+
+        int positiveSupportCount() {
+            return findingSupport + confirmFeedback + needsReviewFeedback;
+        }
+
+        int totalEvidenceCount() {
+            return findingSupport + confirmFeedback
+                    + needsReviewFeedback + falsePositiveFeedback;
+        }
+
+        double confidenceScore() {
+            double raw = findingSupport + confirmFeedback * 2.0
+                    + needsReviewFeedback * 0.5
+                    - falsePositiveFeedback * 1.5;
+            double bounded = Math.max(0.0, raw);
+            return Math.round((bounded / Math.max(1.0, positiveSupportCount())) * 100.0) / 100.0;
+        }
+
+        String candidateId() {
+            String base = (vulnType + "-" + ruleId + "-" + filePattern + "-" + httpPath)
+                    .toLowerCase(Locale.ROOT)
+                    .replaceAll("[^a-z0-9]+", "-")
+                    .replaceAll("^-|-$", "");
+            return base.isBlank() ? "rule-candidate" : base;
+        }
+
+        Map<String, Object> toMap() {
+            Map<String, Object> candidate = new LinkedHashMap<>();
+            candidate.put("schema_version", SCHEMA_VERSION);
+            candidate.put("candidate_id", candidateId());
+            candidate.put("status", "CANDIDATE");
+            candidate.put("vuln_type", vulnType);
+            candidate.put("rule_id", ruleId);
+            candidate.put("file_pattern", filePattern);
+            candidate.put("http_path", httpPath);
+            candidate.put("support_count", positiveSupportCount());
+            candidate.put("total_evidence_count", totalEvidenceCount());
+            candidate.put("observed_finding_count", findingSupport);
+            candidate.put("confirm_count", confirmFeedback);
+            candidate.put("false_positive_count", falsePositiveFeedback);
+            candidate.put("needs_review_count", needsReviewFeedback);
+            candidate.put("job_count", jobs.size());
+            candidate.put("confidence_score", confidenceScore());
+            candidate.put("suggested_agent_guidance", guidance());
+            candidate.put("provenance", provenance);
+            candidate.put("policy",
+                    "Candidate only: requires human approval before becoming an active rule.");
+            return candidate;
+        }
+
+        private String guidance() {
+            if (falsePositiveFeedback > 0 && confirmFeedback == 0) {
+                return "When a similar " + vulnType
+                        + " pattern appears, first verify whether the historical mitigation or reachability break is present before reporting.";
+            }
+            if (confirmFeedback > 0) {
+                return "When a similar " + vulnType
+                        + " pattern appears, prioritize validating attacker control, impact and missing mitigation from current source.";
+            }
+            return "When a similar " + vulnType
+                    + " pattern appears, use this as an audit hypothesis and re-validate from current source.";
         }
 
         private static String textStatic(JsonNode node, String key) {

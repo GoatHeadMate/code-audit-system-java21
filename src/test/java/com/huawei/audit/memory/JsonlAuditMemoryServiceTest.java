@@ -191,6 +191,52 @@ class JsonlAuditMemoryServiceTest {
     }
 
     @Test
+    void refreshesRuleCandidatesFromFindingsAndFeedback() throws Exception {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        Map<String, Object> finding = Map.of(
+                "rule_id", "ssrf-urlconnection",
+                "vuln_type", "SSRF",
+                "verdict", "CONFIRM",
+                "file_path", "src/main/java/demo/ProxyController.java",
+                "http_path", "/proxy",
+                "start_line", 42
+        );
+        AuditJob first = new AuditJob("rule-candidate1", "java");
+        AuditJob second = new AuditJob("rule-candidate2", "java");
+
+        memory.rememberFindings(
+                first,
+                tempDir.resolve("source1"),
+                Map.of("dependencies", List.of()),
+                List.of(finding)
+        );
+        memory.rememberFeedback(
+                second,
+                0,
+                finding,
+                "CONFIRM",
+                "Confirmed with manual PoC",
+                "expert"
+        );
+
+        Path candidates = tempDir.resolve("audit-memory")
+                .resolve("rule-candidates.jsonl");
+        assertThat(candidates).isRegularFile();
+        String content = Files.readString(candidates);
+        assertThat(content)
+                .contains("\"status\":\"CANDIDATE\"")
+                .contains("\"vuln_type\":\"SSRF\"")
+                .contains("\"rule_id\":\"ssrf-urlconnection\"")
+                .contains("\"support_count\":2")
+                .contains("\"total_evidence_count\":2")
+                .contains("\"confirm_count\":1")
+                .contains("requires human approval");
+    }
+
+    @Test
     void recallReadsOnlyRecentMemoryLines() throws Exception {
         JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
                 new ObjectMapper(),

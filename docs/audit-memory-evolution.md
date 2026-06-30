@@ -25,7 +25,10 @@ The first implementation is deliberately conservative:
 - Append reviewer feedback to `audit-memory/feedback.jsonl`.
 - Recall similar historical findings into task-level `memory_priors`.
 - Recall false-positive and confirmed feedback as task-level priors only.
+- Generate `audit-memory/rule-candidates.jsonl` from repeated findings and
+  feedback.
 - Inject priors into hunter tasks as context only.
+- Keep rule candidates inactive until human approval promotes them.
 - Keep all current source validation inside the hunter workflow.
 
 This keeps learning observable and reversible while giving agents better
