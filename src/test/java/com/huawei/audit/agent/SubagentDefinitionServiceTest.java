@@ -23,7 +23,7 @@ class SubagentDefinitionServiceTest {
                 Map.of("sql_injection", "/path/to/task.json")
         );
 
-        Path skill = tempDir.resolve(".claude/skills/audit-sql-injection/SKILL.md");
+        Path skill = tempDir.resolve("skills/audit-sql-injection/SKILL.md");
         assertThat(skill).isRegularFile();
         assertThat(Files.readString(skill))
                 .contains("name: audit-sql-injection")
@@ -37,6 +37,7 @@ class SubagentDefinitionServiceTest {
                 .doesNotContain("# White-Box Judgment Rules");
         assertThat(result).containsEntry("sql_injection", "audit-sql-injection");
         assertThat(tempDir.resolve(".claude/agents")).doesNotExist();
+        assertThat(tempDir.resolve(".claude/skills")).doesNotExist();
         assertThat(tempDir.resolve("instructions")).doesNotExist();
     }
 
@@ -55,7 +56,7 @@ class SubagentDefinitionServiceTest {
         );
 
         assertThat(result).containsExactly(Map.entry("ssrf", "audit-ssrf"));
-        assertThat(tempDir.resolve(".claude/skills/audit-ssrf/SKILL.md"))
+        assertThat(tempDir.resolve("skills/audit-ssrf/SKILL.md"))
                 .isRegularFile();
     }
 }

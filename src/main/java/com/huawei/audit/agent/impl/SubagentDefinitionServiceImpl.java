@@ -19,7 +19,7 @@ public class SubagentDefinitionServiceImpl implements SubagentDefinitionService 
     public Map<String, String> materialize(
             Path workDirectory, List<String> hunters, Map<String, String> taskManifest
     ) throws IOException {
-        Path skillsDir = workDirectory.resolve(".claude").resolve("skills");
+        Path skillsDir = workDirectory.resolve("skills");
         Files.createDirectories(skillsDir);
 
         Map<String, String> skillNames = new LinkedHashMap<>();
