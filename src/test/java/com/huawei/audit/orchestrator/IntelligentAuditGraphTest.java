@@ -10,6 +10,7 @@ import com.huawei.audit.agent.SubagentDefinitionService;
 import com.huawei.audit.agent.SupervisorAgent;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +57,7 @@ class IntelligentAuditGraphTest {
                 supervisor,
                 new FindingDeduplicator(),
                 new AttackChainCorrelator(),
+                AuditMemoryService.NOOP,
                 new JobLogBroker()
         );
 

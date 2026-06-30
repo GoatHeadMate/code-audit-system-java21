@@ -9,6 +9,7 @@ import com.huawei.audit.config.AuditProperties;
 import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import com.huawei.audit.source.AsyncEntryPointDiscoverer;
 import com.huawei.audit.source.HttpEndpointScanner;
 import java.nio.file.Files;
@@ -16,6 +17,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -58,7 +60,8 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null
+                null,
+                AuditMemoryService.NOOP
         );
         AuditJob job = new AuditJob("evidence1", "java");
         job.workDir(tempDir.resolve("audit_evidence1"));
@@ -125,7 +128,8 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null
+                null,
+                AuditMemoryService.NOOP
         );
         AuditJob job = new AuditJob("surface1", "java");
         job.workDir(tempDir.resolve("audit_surface1"));
@@ -174,6 +178,79 @@ class EvidencePreparationServiceTest {
     }
 
     @Test
+    void writesMemoryPriorsAsReviewContextOnly() throws Exception {
+        Path source = tempDir.resolve("memory-source");
+        Files.createDirectories(source);
+        Files.writeString(source.resolve("ProxyController.java"), """
+                import org.springframework.web.bind.annotation.*;
+
+                @RestController
+                class ProxyController {
+                    @GetMapping("/proxy")
+                    String proxy(@RequestParam String url) {
+                        return url;
+                    }
+                }
+                """);
+
+        ObjectMapper mapper = new ObjectMapper();
+        AuditMemoryService memory = new AuditMemoryService() {
+            @Override
+            public void rememberFindings(
+                    AuditJob job,
+                    Path sourceRoot,
+                    Map<String, Object> techProfile,
+                    List<Map<String, Object>> findings
+            ) {
+            }
+
+            @Override
+            public List<Map<String, Object>> recallPriors(
+                    AuditJob job,
+                    String hunter,
+                    String teamFocus,
+                    List<Map<String, Object>> endpointSurface,
+                    List<Map<String, String>> dependencies
+            ) {
+                return List.of(Map.of(
+                        "kind", "HISTORICAL_FINDING_PRIOR",
+                        "vuln_type", "SSRF",
+                        "support_count", 2,
+                        "policy", "Prior only: re-validate from current source"
+                ));
+            }
+        };
+        EvidencePreparationService service = new EvidencePreparationServiceImpl(
+                new WhiteBoxAnalysisServiceImpl(List.of(new HttpEndpointScanner())),
+                mapper,
+                new JobLogBroker(),
+                TEST_PROPERTIES,
+                TEST_ORCH_PROPERTIES,
+                null,
+                memory
+        );
+        AuditJob job = new AuditJob("memory-prior1", "java");
+        job.workDir(tempDir.resolve("audit_memory_prior1"));
+        Files.createDirectories(job.workDir());
+
+        var result = service.prepare(job, source, List.of("ssrf"), List.of());
+        String generatedTask = result.expandedCandidates().getFirst();
+        Path task = Path.of(result.manifest().get(generatedTask));
+        var taskJson = mapper.readTree(task.toFile());
+
+        assertThat(taskJson.path("memory_priors"))
+                .singleElement()
+                .satisfies(prior -> {
+                    assertThat(prior.path("kind").asText())
+                            .isEqualTo("HISTORICAL_FINDING_PRIOR");
+                    assertThat(prior.path("policy").asText())
+                            .contains("Prior only");
+                });
+        assertThat(taskJson.path("candidate_count").asInt()).isZero();
+        assertThat(taskJson.path("endpoint_review_count").asInt()).isEqualTo(1);
+    }
+
+    @Test
     void splitsLargeEndpointReviewSurfaceIntoBatches() throws Exception {
         Path source = tempDir.resolve("large-surface-source");
         Files.createDirectories(source);
@@ -202,7 +279,8 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null
+                null,
+                AuditMemoryService.NOOP
         );
         AuditJob job = new AuditJob("surface2", "java");
         job.workDir(tempDir.resolve("audit_surface2"));
@@ -287,7 +365,8 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null
+                null,
+                AuditMemoryService.NOOP
         );
         AuditJob job = new AuditJob("stored1", "java");
         job.workDir(tempDir.resolve("audit_stored1"));
@@ -338,7 +417,8 @@ class EvidencePreparationServiceTest {
                 new JobLogBroker(),
                 TEST_PROPERTIES,
                 TEST_ORCH_PROPERTIES,
-                null
+                null,
+                AuditMemoryService.NOOP
         );
         AuditJob job = new AuditJob("large1", "java");
         job.workDir(tempDir.resolve("audit_large1"));

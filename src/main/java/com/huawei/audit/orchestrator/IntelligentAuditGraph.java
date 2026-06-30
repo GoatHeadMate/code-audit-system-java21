@@ -5,6 +5,7 @@ import com.huawei.audit.agent.SubagentDefinitionService;
 import com.huawei.audit.agent.SupervisorAgent;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -19,6 +20,7 @@ public class IntelligentAuditGraph {
     private final SupervisorAgent supervisor;
     private final FindingDeduplicator deduplicator;
     private final AttackChainCorrelator chainCorrelator;
+    private final AuditMemoryService auditMemory;
     private final JobLogBroker logs;
 
     public IntelligentAuditGraph(
@@ -27,6 +29,7 @@ public class IntelligentAuditGraph {
             SupervisorAgent supervisor,
             FindingDeduplicator deduplicator,
             AttackChainCorrelator chainCorrelator,
+            AuditMemoryService auditMemory,
             JobLogBroker logs
     ) {
         this.evidencePreparation = evidencePreparation;
@@ -34,6 +37,7 @@ public class IntelligentAuditGraph {
         this.supervisor = supervisor;
         this.deduplicator = deduplicator;
         this.chainCorrelator = chainCorrelator;
+        this.auditMemory = auditMemory;
         this.logs = logs;
     }
 
@@ -68,6 +72,7 @@ public class IntelligentAuditGraph {
 
         List<Map<String, Object>> finalFindings = new ArrayList<>(deduped);
         finalFindings.addAll(chains);
+        auditMemory.rememberFindings(job, sourceRoot, techProfile, finalFindings);
 
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("candidate_hunters", candidates);

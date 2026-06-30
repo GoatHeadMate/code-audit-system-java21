@@ -13,6 +13,7 @@ import com.huawei.audit.config.AuditProperties;
 import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +38,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             "Review every stored candidate as a two-stage flow: HTTP write path, storage boundary, then execution path.",
             "Review every endpoint_review chunk as first-class audit input, even when candidate_count is zero.",
             "For endpoint_review items, inspect the referenced controller method and classify vulnerable versus sec/safe examples from source evidence.",
-            "Treat endpoint business_intents and risk_hypotheses as the harness-generated audit plan; validate or reject each hypothesis from source evidence.",
+            "Treat endpoint business_intents, risk_hypotheses and memory_priors as harness-generated audit priors; validate or reject each from current source evidence.",
             "Do not report a business-intent hypothesis unless source code proves attacker control, security impact and missing/ineffective mitigation.",
             "Use suggested_poc_checks and poc_plan as validation guidance only; do not execute PoC payloads inside this static-review stage.",
             "If a finding is confirmed, copy the relevant poc_plan item into the finding as poc_plan and keep it marked STATIC_POC_PLAN_ONLY.",
@@ -57,6 +58,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final ObjectWriter prettyWriter;
     private final JobLogBroker logs;
     private final ClaudeGateway claudeGateway;
+    private final AuditMemoryService auditMemory;
     private final OrchestratorProperties orchestratorProperties;
     private final Semaphore analysisSlot = new Semaphore(1, true);
     private final long analysisTimeoutMs;
@@ -68,7 +70,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             JobLogBroker logs,
             AuditProperties properties,
             OrchestratorProperties orchestratorProperties,
-            ClaudeGateway claudeGateway
+            ClaudeGateway claudeGateway,
+            AuditMemoryService auditMemory
     ) {
         this.analysisService = analysisService;
         this.objectMapper = objectMapper;
@@ -79,6 +82,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
         this.orchestratorProperties = orchestratorProperties;
         this.claudeGateway = claudeGateway;
+        this.auditMemory = auditMemory;
         this.cacheDirectory = properties.absoluteWorkspace().resolve(".analysis-cache");
         try { Files.createDirectories(cacheDirectory); } catch (IOException ignored) { }
     }
@@ -165,7 +169,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                         relevantStored.size(), storedChunks,
                         List.of(), List.of(), 0,
                         "candidate-path-validation",
-                        analysis, maxChunks, manifest, expandedCandidates, job);
+                        analysis, dependencies, maxChunks, manifest,
+                        expandedCandidates, job);
             }
 
             for (EvidencePackagePolicy.EndpointReviewTeam team :
@@ -182,7 +187,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                         0, List.of(), 0, List.of(),
                         team.endpoints(), endpointChunks, team.endpoints().size(),
                         team.focus(),
-                        analysis, maxChunks, manifest, expandedCandidates, job);
+                        analysis, dependencies, maxChunks, manifest,
+                        expandedCandidates, job);
             }
         }
 
@@ -214,6 +220,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             int endpointCount,
             String teamFocus,
             WhiteBoxAnalysisService.AnalysisResult analysis,
+            List<Map<String, String>> dependencies,
             int maxChunks, Map<String, String> manifest,
             List<String> expandedCandidates, AuditJob job
     ) throws Exception {
@@ -228,7 +235,14 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                     candidateCount, candidateChunks,
                     storedCount, storedChunks,
                     endpointSurface, endpointChunks, endpointCount,
-                    teamFocus, analysis);
+                    teamFocus, analysis,
+                    auditMemory.recallPriors(
+                            job,
+                            taskName,
+                            teamFocus,
+                            endpointSurface,
+                            dependencies
+                    ));
             manifest.put(taskName, absolute(taskFile));
             expandedCandidates.add(taskName);
             return;
@@ -239,6 +253,13 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                 endpointChunks,
                 teamFocus,
                 analysis,
+                auditMemory.recallPriors(
+                        job,
+                        taskName,
+                        teamFocus,
+                        endpointSurface,
+                        dependencies
+                ),
                 maxChunks, manifest, expandedCandidates, job);
     }
 
@@ -249,6 +270,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<String> endpointChunks,
             String teamFocus,
             WhiteBoxAnalysisService.AnalysisResult analysis,
+            List<Map<String, Object>> memoryPriors,
             int maxChunks, Map<String, String> manifest,
             List<String> expandedCandidates, AuditJob job
     ) throws Exception {
@@ -287,7 +309,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                     bcCount, bc, bsCount, bs,
                     List.of(), be, beCount,
                     teamFocus,
-                    analysis);
+                    analysis,
+                    memoryPriors);
             manifest.put(batchName, absolute(batchFile));
             expandedCandidates.add(batchName);
         }
@@ -314,7 +337,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         writeTaskFile(taskFile, hunter, sourceRoot, indexFile,
                 candidateCount, candidateChunks, storedCount, storedChunks,
                 endpointSurface, endpointChunks, endpointSurface.size(),
-                "general", analysis);
+                "general", analysis, List.of());
     }
 
     private void writeTaskFile(
@@ -325,7 +348,8 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
             List<String> endpointChunks,
             int endpointCount,
             String teamFocus,
-            WhiteBoxAnalysisService.AnalysisResult analysis
+            WhiteBoxAnalysisService.AnalysisResult analysis,
+            List<Map<String, Object>> memoryPriors
     ) throws Exception {
         String baseHunter = EvidencePackagePolicy.baseHunterName(hunter);
         Map<String, Object> task = new LinkedHashMap<>();
@@ -348,6 +372,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                             analysis.entryPoints(), analysis.candidatePaths()));
         }
         task.put("endpoint_review_surface", endpointSurface);
+        task.put("memory_priors", memoryPriors == null ? List.of() : memoryPriors);
         task.put("unresolved_entrypoints", analysis.entryPoints().stream()
                 .filter(entry -> "UNRESOLVED".equals(entry.bindingStatus())).toList());
         task.put("review_contract", REVIEW_CONTRACT);
