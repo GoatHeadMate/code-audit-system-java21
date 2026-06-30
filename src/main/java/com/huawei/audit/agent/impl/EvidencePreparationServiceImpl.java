@@ -231,18 +231,19 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         if (totalChunks <= maxChunks
                 && totalReviewItems <= MAX_REVIEW_ITEMS_PER_AGENT) {
             Path taskFile = taskDir.resolve("task.json");
+            List<Map<String, Object>> memoryPriors = auditMemory.recallPriors(
+                    job,
+                    taskName,
+                    teamFocus,
+                    endpointSurface,
+                    dependencies
+            );
             writeTaskFile(taskFile, taskName, sourceRoot, indexFile,
                     candidateCount, candidateChunks,
                     storedCount, storedChunks,
                     endpointSurface, endpointChunks, endpointCount,
                     teamFocus, analysis,
-                    auditMemory.recallPriors(
-                            job,
-                            taskName,
-                            teamFocus,
-                            endpointSurface,
-                            dependencies
-                    ));
+                    memoryPriors);
             manifest.put(taskName, absolute(taskFile));
             expandedCandidates.add(taskName);
             return;
@@ -373,10 +374,67 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
         }
         task.put("endpoint_review_surface", endpointSurface);
         task.put("memory_priors", memoryPriors == null ? List.of() : memoryPriors);
+        task.put("harness_decision", harnessDecision(
+                hunter,
+                candidateCount,
+                storedCount,
+                endpointCount,
+                memoryPriors
+        ));
         task.put("unresolved_entrypoints", analysis.entryPoints().stream()
                 .filter(entry -> "UNRESOLVED".equals(entry.bindingStatus())).toList());
         task.put("review_contract", REVIEW_CONTRACT);
         writeJson(taskFile, task);
+    }
+
+    private Map<String, Object> harnessDecision(
+            String hunter,
+            int candidateCount,
+            int storedCount,
+            int endpointCount,
+            List<Map<String, Object>> memoryPriors
+    ) {
+        int reviewItems = candidateCount + storedCount + endpointCount;
+        int priorScore = 0;
+        int highTrustPriors = 0;
+        List<String> reasons = new ArrayList<>();
+        for (Map<String, Object> prior : memoryPriors == null ? List.<Map<String, Object>>of() : memoryPriors) {
+            String kind = String.valueOf(prior.getOrDefault("kind", ""));
+            int weight = switch (kind) {
+                case "APPROVED_RULE_PRIOR" -> 6;
+                case "HISTORICAL_POC_SUCCESS_PRIOR" -> 5;
+                case "HISTORICAL_CONFIRMED_PRIOR",
+                     "HISTORICAL_MISSED_FINDING_PRIOR" -> 3;
+                case "HISTORICAL_FALSE_POSITIVE_PRIOR",
+                     "HISTORICAL_NEGATIVE_VALIDATION_PRIOR",
+                     "HISTORICAL_RISK_ADJUSTMENT_PRIOR" -> 2;
+                default -> 1;
+            };
+            priorScore += weight;
+            if (weight >= 5) {
+                highTrustPriors++;
+            }
+            if (reasons.size() < 3) {
+                reasons.add(kind + ":" + prior.getOrDefault("rule_id", ""));
+            }
+        }
+        int priority = reviewItems + priorScore;
+        int steps = 18 + Math.min(12, reviewItems / 2) + Math.min(15, priorScore);
+        if (highTrustPriors > 0) {
+            steps += 5;
+        }
+        steps = Math.max(16, Math.min(45, steps));
+        return Map.of(
+                "team", hunter,
+                "priority_score", priority,
+                "recommended_steps", steps,
+                "review_item_count", reviewItems,
+                "memory_prior_count", memoryPriors == null ? 0 : memoryPriors.size(),
+                "high_trust_prior_count", highTrustPriors,
+                "rationale", reasons.isEmpty()
+                        ? "baseline review budget from current evidence"
+                        : "memory priors adjust priority: " + String.join(", ", reasons)
+        );
     }
 
     private WhiteBoxAnalysisService.AnalysisResult cachedAnalysis(

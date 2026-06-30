@@ -14,8 +14,10 @@ import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -511,6 +513,94 @@ class SupervisorAgentTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void appliesHarnessDecisionBudgetAndRecordsAgentRun()
+            throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    return """
+                            {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                            """.formatted(hunter);
+                });
+        List<Map<String, Object>> runs = new ArrayList<>();
+        AuditMemoryService memory = new AuditMemoryService() {
+            @Override
+            public void rememberFindings(
+                    AuditJob job,
+                    Path sourceRoot,
+                    Map<String, Object> techProfile,
+                    List<Map<String, Object>> findings
+            ) {
+            }
+
+            @Override
+            public List<Map<String, Object>> recallPriors(
+                    AuditJob job,
+                    String hunter,
+                    String teamFocus,
+                    List<Map<String, Object>> endpointSurface,
+                    List<Map<String, String>> dependencies
+            ) {
+                return List.of();
+            }
+
+            @Override
+            public void rememberAgentRun(AuditJob job, Map<String, Object> agentRun) {
+                runs.add(agentRun);
+            }
+        };
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5,
+                        80
+                ),
+                new JobLogBroker(),
+                memory
+        );
+        AuditJob job = new AuditJob("budget123", "java");
+        job.workDir(tempDir.resolve("audit_budget123"));
+        Files.createDirectories(job.workDir());
+
+        supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("ssrf"),
+                Map.of("ssrf", taskFileWithDecision("ssrf", 36, 11).toString()),
+                Map.of(),
+                Map.of()
+        );
+
+        ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
+                ArgumentCaptor.forClass(Map.class);
+        verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
+        ClaudeGateway.AgentDef agent = agentsCaptor.getValue().get("ssrf");
+        assertThat(agent.steps()).isEqualTo(36);
+        assertThat(agent.priority()).isEqualTo(11);
+        assertThat(agent.scheduleReason()).contains("approved prior");
+
+        assertThat(runs).singleElement().satisfies(run -> {
+            assertThat(run)
+                    .containsEntry("hunter", "ssrf")
+                    .containsEntry("status", "SUCCESS")
+                    .containsEntry("findings_count", 0)
+                    .containsEntry("steps_budget", 36)
+                    .containsEntry("priority_score", 11);
+            assertThat(run).containsKeys("duration_ms", "slot_wait_ms", "tools");
+        });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void keepsEndpointReviewSurfaceWithoutCandidatePaths()
             throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
@@ -618,6 +708,29 @@ class SupervisorAgentTest {
                   "authorization_surface":[{"path":"/execute/cmd"}]
                 }
                 """);
+        return task;
+    }
+
+    private Path taskFileWithDecision(
+            String hunter,
+            int recommendedSteps,
+            int priority
+    ) throws Exception {
+        Path tasks = tempDir.resolve("tasks");
+        Files.createDirectories(tasks);
+        Path task = tasks.resolve(hunter + "-decision.json");
+        Files.writeString(task, """
+                {
+                  "hunter":"%s",
+                  "candidate_count":1,
+                  "stored_candidate_count":0,
+                  "harness_decision":{
+                    "recommended_steps":%d,
+                    "priority_score":%d,
+                    "rationale":"approved prior"
+                  }
+                }
+                """.formatted(hunter, recommendedSteps, priority));
         return task;
     }
 

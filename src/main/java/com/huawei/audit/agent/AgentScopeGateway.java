@@ -238,7 +238,7 @@ public class AgentScopeGateway implements ClaudeGateway {
                             .description(entry.getValue().description())
                             .inlineAgentsBody(entry.getValue().prompt())
                             .workspaceMode(WorkspaceMode.SHARED)
-                            .steps(Math.min(properties.maxIters(), 30))
+                            .steps(effectiveSteps(entry.getValue()))
                             .mode(SubagentDeclaration.Mode.SUBAGENT);
                     List<String> tools = entry.getValue().tools();
                     if (tools != null && !tools.isEmpty()) {
@@ -247,6 +247,11 @@ public class AgentScopeGateway implements ClaudeGateway {
                     return builder.build();
                 })
                 .toList();
+    }
+
+    private int effectiveSteps(AgentDef agentDef) {
+        int requested = agentDef.steps() == null ? 30 : agentDef.steps();
+        return Math.max(8, Math.min(properties.maxIters(), requested));
     }
 
     private RuntimeContext runtimeContext(String prefix) {

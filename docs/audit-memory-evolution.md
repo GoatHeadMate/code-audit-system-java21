@@ -33,7 +33,12 @@ The first implementation is deliberately conservative:
   feedback.
 - Record human rule decisions in `audit-memory/rule-decisions.jsonl`.
 - Rewrite approved rule snapshots into `audit-memory/approved-rules.jsonl`.
+- Append hunter execution telemetry to `audit-memory/agent-runs.jsonl`.
 - Inject priors into hunter tasks as context only.
+- Generate a `harness_decision` object in each hunter task with
+  `priority_score`, `recommended_steps`, prior counts, and rationale.
+- Sort hunter sessions by `priority_score` and pass `recommended_steps` to the
+  AgentScope subagent declaration.
 - Keep rule candidates inactive until human approval promotes them to approved
   priors. Approved priors still require current-source validation.
 - Keep all current source validation inside the hunter workflow.
@@ -51,6 +56,15 @@ The first implementation is deliberately conservative:
 - `POC_SUCCESS`: high-trust true-positive prior.
 - `POC_FAILURE`: negative-validation prior; verify the same PoC failure,
   mitigation, or reachability break before suppressing.
+
+## Implemented Harness Decisions
+
+- Approved rules and historical PoC successes increase team priority and steps.
+- Confirmed findings and missed-finding feedback increase review priority.
+- False-positive, PoC-failure and risk-downgrade feedback still trigger review,
+  but as validation guidance rather than automatic suppression.
+- Agent run telemetry records hunter name, status, duration, model-slot wait,
+  findings count, steps budget, priority score, tools and failure reason.
 
 This keeps learning observable and reversible while giving agents better
 attention without letting historical mistakes become automatic judgments.

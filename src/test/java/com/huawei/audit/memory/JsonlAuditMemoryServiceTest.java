@@ -381,6 +381,38 @@ class JsonlAuditMemoryServiceTest {
     }
 
     @Test
+    void appendsAgentRunTelemetryForSchedulingEvolution() throws Exception {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        AuditJob job = new AuditJob("agent-run1", "java");
+        job.cacheKey("source-a");
+
+        memory.rememberAgentRun(job, Map.of(
+                "hunter", "ssrf",
+                "base_hunter", "ssrf",
+                "status", "SUCCESS",
+                "duration_ms", 123,
+                "slot_wait_ms", 7,
+                "findings_count", 2,
+                "steps_budget", 36,
+                "priority_score", 11,
+                "schedule_reason", "approved prior",
+                "tools", List.of("read_file", "grep_files")
+        ));
+
+        Path telemetry = tempDir.resolve("audit-memory")
+                .resolve("agent-runs.jsonl");
+        assertThat(telemetry).isRegularFile();
+        assertThat(Files.readString(telemetry))
+                .contains("\"event_type\":\"agent_run\"")
+                .contains("\"hunter\":\"ssrf\"")
+                .contains("\"duration_ms\":123")
+                .contains("scheduling-prior-only");
+    }
+
+    @Test
     void recallReadsOnlyRecentMemoryLines() throws Exception {
         JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
                 new ObjectMapper(),

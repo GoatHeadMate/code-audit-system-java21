@@ -74,6 +74,12 @@ public interface AuditMemoryService {
         return Optional.empty();
     }
 
+    default void rememberAgentRun(
+            AuditJob job,
+            Map<String, Object> agentRun
+    ) {
+    }
+
     List<Map<String, Object>> recallPriors(
             AuditJob job,
             String hunter,

@@ -57,6 +57,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
     private final Path ruleCandidatesFile;
     private final Path ruleDecisionsFile;
     private final Path approvedRulesFile;
+    private final Path agentRunsFile;
 
     public JsonlAuditMemoryService(
             ObjectMapper objectMapper,
@@ -78,6 +79,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         this.approvedRulesFile = properties.absoluteWorkspace()
                 .resolve("audit-memory")
                 .resolve("approved-rules.jsonl");
+        this.agentRunsFile = properties.absoluteWorkspace()
+                .resolve("audit-memory")
+                .resolve("agent-runs.jsonl");
     }
 
     @Override
@@ -312,6 +316,36 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     .findFirst();
         } catch (Exception ignored) {
             return Optional.empty();
+        }
+    }
+
+    @Override
+    public synchronized void rememberAgentRun(
+            AuditJob job,
+            Map<String, Object> agentRun
+    ) {
+        if (job == null || agentRun == null || agentRun.isEmpty()) {
+            return;
+        }
+        try {
+            Files.createDirectories(agentRunsFile.getParent());
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("schema_version", SCHEMA_VERSION);
+            event.put("event_type", "agent_run");
+            event.put("recorded_at", Instant.now().toString());
+            event.put("job_id", job.jobId());
+            event.put("lang", job.lang());
+            event.put("source_type", job.sourceType());
+            event.put("git_url", job.gitUrl());
+            event.put("cache_key", job.cacheKey());
+            event.putAll(agentRun);
+            event.put("memory_policy",
+                    "agent-behavior-telemetry; scheduling-prior-only");
+            Files.writeString(agentRunsFile,
+                    objectMapper.writeValueAsString(event) + System.lineSeparator(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+        } catch (Exception ignored) {
         }
     }
 

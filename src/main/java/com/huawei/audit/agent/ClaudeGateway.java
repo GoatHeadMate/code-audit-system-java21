@@ -23,6 +23,18 @@ public interface ClaudeGateway {
             String description,
             String prompt,
             List<String> tools,
-            String model
-    ) {}
+            String model,
+            Integer steps,
+            int priority,
+            String scheduleReason
+    ) {
+        public AgentDef(
+                String description,
+                String prompt,
+                List<String> tools,
+                String model
+        ) {
+            this(description, prompt, tools, model, null, 0, "");
+        }
+    }
 }

@@ -6,10 +6,13 @@ import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
 import com.huawei.audit.job.JobLogBroker;
+import com.huawei.audit.memory.AuditMemoryService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -52,6 +55,24 @@ public class SupervisorAgent {
     private final FindingParser findingParser;
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
+    private final AuditMemoryService auditMemory;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory
+    ) {
+        this.gateway = gateway;
+        this.objectMapper = objectMapper;
+        this.findingParser = findingParser;
+        this.properties = properties;
+        this.logs = logs;
+        this.auditMemory = auditMemory;
+    }
 
     public SupervisorAgent(
             ClaudeGateway gateway,
@@ -60,11 +81,8 @@ public class SupervisorAgent {
             OrchestratorProperties properties,
             JobLogBroker logs
     ) {
-        this.gateway = gateway;
-        this.objectMapper = objectMapper;
-        this.findingParser = findingParser;
-        this.properties = properties;
-        this.logs = logs;
+        this(gateway, objectMapper, findingParser, properties, logs,
+                AuditMemoryService.NOOP);
     }
 
     public SupervisorResult run(
@@ -199,9 +217,14 @@ public class SupervisorAgent {
         String prompt = systemPrompt() + "\n\n"
                 + userPrompt(sourceRoot, techProfile, List.of(hunter), analysisSummary);
         boolean slotAcquired = false;
+        long createdAt = System.nanoTime();
+        long startedAt = createdAt;
+        String startedAtText = Instant.now().toString();
         try {
             sessionSlots.acquire();
             slotAcquired = true;
+            startedAt = System.nanoTime();
+            startedAtText = Instant.now().toString();
             logs.publish(
                     job,
                     "[supervisor-agent] hunter " + hunter
@@ -230,9 +253,14 @@ public class SupervisorAgent {
                     "[supervisor-agent] hunter " + hunter
                             + " completed; findings=" + envelope.findings().size()
             );
+            rememberAgentRun(job, hunter, agentDef, "SUCCESS", startedAtText,
+                    createdAt, startedAt, envelope.findings().size(), null);
             return new HunterSessionResult(hunter, envelope, null);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
+            rememberAgentRun(job, hunter, agentDef, "INTERRUPTED", startedAtText,
+                    createdAt, startedAt, 0,
+                    "interrupted while waiting for model slot");
             return new HunterSessionResult(
                     hunter,
                     null,
@@ -244,12 +272,46 @@ public class SupervisorAgent {
                     "[supervisor-agent] hunter " + hunter
                             + " failed: " + exception.getMessage()
             );
+            rememberAgentRun(job, hunter, agentDef, "FAILED", startedAtText,
+                    createdAt, startedAt, 0, exception.getMessage());
             return new HunterSessionResult(hunter, null, exception.getMessage());
         } finally {
             if (slotAcquired) {
                 sessionSlots.release();
             }
         }
+    }
+
+    private void rememberAgentRun(
+            AuditJob job,
+            String hunter,
+            ClaudeGateway.AgentDef agentDef,
+            String status,
+            String startedAtText,
+            long createdAtNanos,
+            long startedAtNanos,
+            int findingsCount,
+            String failure
+    ) {
+        long finishedAtNanos = System.nanoTime();
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("hunter", hunter);
+        event.put("base_hunter", baseHunterName(hunter));
+        event.put("status", status);
+        event.put("started_at", startedAtText);
+        event.put("duration_ms", Math.max(0,
+                (finishedAtNanos - startedAtNanos) / 1_000_000));
+        event.put("slot_wait_ms", Math.max(0,
+                (startedAtNanos - createdAtNanos) / 1_000_000));
+        event.put("findings_count", findingsCount);
+        event.put("steps_budget", agentDef.steps());
+        event.put("priority_score", agentDef.priority());
+        event.put("schedule_reason", agentDef.scheduleReason());
+        event.put("tools", agentDef.tools());
+        if (failure != null && !failure.isBlank()) {
+            event.put("failure", failure);
+        }
+        auditMemory.rememberAgentRun(job, event);
     }
 
     private HunterSessionResult await(Future<HunterSessionResult> future) {
@@ -314,6 +376,7 @@ public class SupervisorAgent {
                 "grep_files",
                 "load_skill_through_path"
         );
+        List<AgentBuild> builds = new ArrayList<>();
         for (String hunter : candidates) {
             String taskPath = evidenceManifest.get(hunter);
             if (taskPath == null) {
@@ -325,6 +388,7 @@ public class SupervisorAgent {
             String baseHunter = baseHunterName(hunter);
             String skillName = skillManifest.get(baseHunter);
             String skillRef = skillName == null ? "(none)" : skillName;
+            Map<String, Object> decision = harnessDecision(Path.of(taskPath));
             String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
                     hunter,
                     skillRef,
@@ -332,15 +396,56 @@ public class SupervisorAgent {
                     taskPath,
                     sourceRootStr
             );
-            agents.put(hunter, new ClaudeGateway.AgentDef(
+            builds.add(new AgentBuild(hunter, new ClaudeGateway.AgentDef(
                     "Audit " + hunter.replace('_', ' ')
                             + " vulnerabilities in the target project",
                     agentPrompt,
                     readOnlyTools,
-                    null
-            ));
+                    null,
+                    intValue(decision, "recommended_steps"),
+                    intValueOrDefault(decision, "priority_score", 0),
+                    String.valueOf(decision.getOrDefault("rationale", ""))
+            )));
         }
+        builds.stream()
+                .sorted(Comparator
+                        .comparingInt((AgentBuild build) -> build.agentDef().priority())
+                        .reversed()
+                        .thenComparing(AgentBuild::hunter))
+                .forEach(build -> agents.put(build.hunter(), build.agentDef()));
         return agents;
+    }
+
+    private Map<String, Object> harnessDecision(Path taskPath) {
+        try {
+            JsonNode task = objectMapper.readTree(taskPath.toFile());
+            JsonNode decision = task.path("harness_decision");
+            if (!decision.isObject()) {
+                return Map.of();
+            }
+            return objectMapper.convertValue(decision, Map.class);
+        } catch (Exception ignored) {
+            return Map.of();
+        }
+    }
+
+    private Integer intValue(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value != null) {
+            try {
+                return Integer.parseInt(value.toString());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return null;
+    }
+
+    private int intValueOrDefault(Map<String, Object> map, String key, int fallback) {
+        Integer value = intValue(map, key);
+        return value == null ? fallback : value;
     }
 
     private boolean hasReviewWork(Path taskPath) {
@@ -762,6 +867,11 @@ public class SupervisorAgent {
             String hunter,
             SupervisorEnvelope envelope,
             String failure
+    ) { }
+
+    private record AgentBuild(
+            String hunter,
+            ClaudeGateway.AgentDef agentDef
     ) { }
 
     public record SupervisorResult(
