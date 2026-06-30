@@ -49,6 +49,23 @@ public final class ApiDtos {
             String message
     ) { }
 
+    public record RuleCandidatesResponse(
+            List<Map<String, Object>> candidates
+    ) { }
+
+    public record RuleDecisionRequest(
+            String decision,
+            String rationale,
+            String reviewer
+    ) { }
+
+    public record RuleDecisionResponse(
+            String candidateId,
+            String status,
+            String message,
+            Map<String, Object> candidate
+    ) { }
+
     public record JobStatusResponse(
             String jobId,
             String status,

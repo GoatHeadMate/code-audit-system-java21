@@ -4,6 +4,7 @@ import com.huawei.audit.domain.AuditJob;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 public interface AuditMemoryService {
     AuditMemoryService NOOP = new AuditMemoryService() {
@@ -43,6 +44,19 @@ public interface AuditMemoryService {
             String rationale,
             String reviewer
     ) {
+    }
+
+    default List<Map<String, Object>> listRuleCandidates() {
+        return List.of();
+    }
+
+    default Optional<Map<String, Object>> decideRuleCandidate(
+            String candidateId,
+            String decision,
+            String rationale,
+            String reviewer
+    ) {
+        return Optional.empty();
     }
 
     List<Map<String, Object>> recallPriors(

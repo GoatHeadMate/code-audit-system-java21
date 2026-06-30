@@ -15,6 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.stereotype.Service;
 
@@ -54,6 +55,8 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
     private final Path memoryFile;
     private final Path feedbackFile;
     private final Path ruleCandidatesFile;
+    private final Path ruleDecisionsFile;
+    private final Path approvedRulesFile;
 
     public JsonlAuditMemoryService(
             ObjectMapper objectMapper,
@@ -69,6 +72,12 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         this.ruleCandidatesFile = properties.absoluteWorkspace()
                 .resolve("audit-memory")
                 .resolve("rule-candidates.jsonl");
+        this.ruleDecisionsFile = properties.absoluteWorkspace()
+                .resolve("audit-memory")
+                .resolve("rule-decisions.jsonl");
+        this.approvedRulesFile = properties.absoluteWorkspace()
+                .resolve("audit-memory")
+                .resolve("approved-rules.jsonl");
     }
 
     @Override
@@ -191,7 +200,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             List<Map<String, Object>> endpointSurface,
             List<Map<String, String>> dependencies
     ) {
-        if (!Files.isRegularFile(memoryFile) && !Files.isRegularFile(feedbackFile)) {
+        if (!Files.isRegularFile(memoryFile)
+                && !Files.isRegularFile(feedbackFile)
+                && !Files.isRegularFile(approvedRulesFile)) {
             return List.of();
         }
         try {
@@ -210,6 +221,10 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 collectPrior(job, relevantTypes, currentDependencies,
                         endpointPaths, endpointFiles, teamFocus, priors, line);
             }
+            for (String line : recentLines(approvedRulesFile)) {
+                collectPrior(job, relevantTypes, currentDependencies,
+                        endpointPaths, endpointFiles, teamFocus, priors, line);
+            }
 
             return priors.values().stream()
                     .sorted(Comparator.comparingInt(PriorAccumulator::score).reversed())
@@ -218,6 +233,65 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     .toList();
         } catch (Exception ignored) {
             return List.of();
+        }
+    }
+
+    @Override
+    public synchronized List<Map<String, Object>> listRuleCandidates() {
+        try {
+            refreshRuleCandidates();
+            return readJsonlMaps(ruleCandidatesFile);
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    @Override
+    public synchronized Optional<Map<String, Object>> decideRuleCandidate(
+            String candidateId,
+            String decision,
+            String rationale,
+            String reviewer
+    ) {
+        String normalizedDecision = normalizeRuleDecision(decision);
+        String normalizedCandidateId = safeText(candidateId);
+        if (normalizedCandidateId.isBlank() || normalizedDecision.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            refreshRuleCandidates();
+            Optional<Map<String, Object>> existing = readJsonlMaps(ruleCandidatesFile)
+                    .stream()
+                    .filter(candidate -> normalizedCandidateId.equals(
+                            candidate.getOrDefault("candidate_id", "").toString()))
+                    .findFirst();
+            if (existing.isEmpty()) {
+                return Optional.empty();
+            }
+
+            Files.createDirectories(ruleDecisionsFile.getParent());
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("schema_version", SCHEMA_VERSION);
+            event.put("event_type", "rule_candidate_decision");
+            event.put("recorded_at", Instant.now().toString());
+            event.put("candidate_id", normalizedCandidateId);
+            event.put("decision", normalizedDecision);
+            event.put("rationale", safeText(rationale));
+            event.put("reviewer", safeText(reviewer));
+            event.put("memory_policy",
+                    "human-gated-rule-decision; approved rules remain priors only");
+            Files.writeString(ruleDecisionsFile,
+                    objectMapper.writeValueAsString(event) + System.lineSeparator(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND);
+            refreshRuleCandidates();
+            return readJsonlMaps(ruleCandidatesFile)
+                    .stream()
+                    .filter(candidate -> normalizedCandidateId.equals(
+                            candidate.getOrDefault("candidate_id", "").toString()))
+                    .findFirst();
+        } catch (Exception ignored) {
+            return Optional.empty();
         }
     }
 
@@ -314,6 +388,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         for (String line : recentLines(feedbackFile)) {
             collectRuleCandidate(candidates, line);
         }
+        Map<String, JsonNode> decisions = latestRuleDecisions();
         List<Map<String, Object>> output = candidates.values().stream()
                 .filter(RuleCandidateAccumulator::shouldEmit)
                 .sorted(Comparator
@@ -321,6 +396,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                         .reversed()
                         .thenComparing(RuleCandidateAccumulator::candidateId))
                 .map(RuleCandidateAccumulator::toMap)
+                .map(candidate -> applyRuleDecision(candidate, decisions))
                 .toList();
         Files.createDirectories(ruleCandidatesFile.getParent());
         StringBuilder lines = new StringBuilder();
@@ -329,6 +405,63 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                     .append(System.lineSeparator());
         }
         Files.writeString(ruleCandidatesFile, lines.toString(),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING);
+        writeApprovedRules(output);
+    }
+
+    private Map<String, JsonNode> latestRuleDecisions() throws Exception {
+        Map<String, JsonNode> decisions = new LinkedHashMap<>();
+        for (String line : recentLines(ruleDecisionsFile)) {
+            if (line.isBlank()) {
+                continue;
+            }
+            JsonNode node = objectMapper.readTree(line);
+            String candidateId = text(node, "candidate_id");
+            String decision = text(node, "decision");
+            if (!candidateId.isBlank() && !decision.isBlank()) {
+                decisions.put(candidateId, node);
+            }
+        }
+        return decisions;
+    }
+
+    private Map<String, Object> applyRuleDecision(
+            Map<String, Object> candidate,
+            Map<String, JsonNode> decisions
+    ) {
+        String candidateId = candidate.getOrDefault("candidate_id", "").toString();
+        JsonNode decision = decisions.get(candidateId);
+        if (decision == null) {
+            return candidate;
+        }
+        Map<String, Object> updated = new LinkedHashMap<>(candidate);
+        String status = text(decision, "decision");
+        updated.put("status", status);
+        updated.put("decision_rationale", text(decision, "rationale"));
+        updated.put("decision_reviewer", text(decision, "reviewer"));
+        updated.put("decided_at", text(decision, "recorded_at"));
+        return updated;
+    }
+
+    private void writeApprovedRules(List<Map<String, Object>> candidates) throws Exception {
+        Files.createDirectories(approvedRulesFile.getParent());
+        StringBuilder lines = new StringBuilder();
+        for (Map<String, Object> candidate : candidates) {
+            if (!"APPROVED".equals(candidate.getOrDefault("status", "").toString())) {
+                continue;
+            }
+            Map<String, Object> rule = new LinkedHashMap<>(candidate);
+            rule.put("event_type", "approved_rule");
+            rule.put("recorded_at", Instant.now().toString());
+            rule.put("feedback_verdict", "CONFIRM");
+            rule.put("file_path", candidate.getOrDefault("file_pattern", ""));
+            rule.put("memory_policy",
+                    "approved-rule-prior-only; revalidate from current source");
+            lines.append(objectMapper.writeValueAsString(rule))
+                    .append(System.lineSeparator());
+        }
+        Files.writeString(approvedRulesFile, lines.toString(),
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING);
     }
@@ -366,6 +499,35 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             case "NEEDS_REVIEW", "REVIEW" -> "NEEDS_REVIEW";
             default -> "";
         };
+    }
+
+    private String normalizeRuleDecision(String decision) {
+        String normalized = normalize(decision);
+        return switch (normalized) {
+            case "APPROVE", "APPROVED", "ACCEPT", "ACCEPTED" -> "APPROVED";
+            case "REJECT", "REJECTED", "DENY", "DENIED" -> "REJECTED";
+            case "DISCARD", "DISCARDED", "DISMISS", "DISMISSED" -> "DISCARDED";
+            default -> "";
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> readJsonlMaps(Path file) throws Exception {
+        if (!Files.isRegularFile(file)) {
+            return List.of();
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (String line : Files.readAllLines(file)) {
+            if (line.isBlank()) {
+                continue;
+            }
+            try {
+                rows.add((Map<String, Object>) objectMapper.readValue(
+                        line, LinkedHashMap.class));
+            } catch (Exception ignored) {
+            }
+        }
+        return rows;
     }
 
     private String safeText(String value) {

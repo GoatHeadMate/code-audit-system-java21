@@ -3,6 +3,9 @@ package com.huawei.audit.api;
 import com.huawei.audit.api.ApiDtos.FindingsResponse;
 import com.huawei.audit.api.ApiDtos.FindingFeedbackRequest;
 import com.huawei.audit.api.ApiDtos.FindingFeedbackResponse;
+import com.huawei.audit.api.ApiDtos.RuleCandidatesResponse;
+import com.huawei.audit.api.ApiDtos.RuleDecisionRequest;
+import com.huawei.audit.api.ApiDtos.RuleDecisionResponse;
 import com.huawei.audit.api.ApiDtos.InterfaceOption;
 import com.huawei.audit.api.ApiDtos.InterfacePreviewResponse;
 import com.huawei.audit.api.ApiDtos.JobListResponse;
@@ -269,6 +272,45 @@ public class AuditController {
         );
     }
 
+    @GetMapping("/audit/rule-candidates")
+    public RuleCandidatesResponse ruleCandidates() {
+        return new RuleCandidatesResponse(auditMemory.listRuleCandidates());
+    }
+
+    @PostMapping(
+            path = "/audit/rule-candidates/{candidateId}/decision",
+            consumes = MediaType.APPLICATION_JSON_VALUE
+    )
+    public RuleDecisionResponse decideRuleCandidate(
+            @PathVariable String candidateId,
+            @RequestBody RuleDecisionRequest request
+    ) {
+        String decision = normalizeRuleDecision(request == null
+                ? null
+                : request.decision());
+        if (decision.isBlank()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "decision must be APPROVE, REJECT or DISCARD"
+            );
+        }
+        Map<String, Object> candidate = auditMemory.decideRuleCandidate(
+                candidateId,
+                decision,
+                request == null ? "" : request.rationale(),
+                request == null ? "" : request.reviewer()
+        ).orElseThrow(() -> new ResponseStatusException(
+                HttpStatus.NOT_FOUND,
+                "unknown rule candidate: " + candidateId
+        ));
+        return new RuleDecisionResponse(
+                candidateId,
+                candidate.getOrDefault("status", "").toString(),
+                "rule decision recorded; approved rules remain priors only",
+                candidate
+        );
+    }
+
     @GetMapping(
             path = "/audit/{jobId}/logs",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE
@@ -308,6 +350,18 @@ public class AuditController {
             case "CONFIRM", "CONFIRMED", "TRUE_POSITIVE" -> "CONFIRM";
             case "FALSE_POSITIVE", "SUPPRESS", "SUPPRESSED" -> "FALSE_POSITIVE";
             case "NEEDS_REVIEW", "REVIEW" -> "NEEDS_REVIEW";
+            default -> "";
+        };
+    }
+
+    private String normalizeRuleDecision(String decision) {
+        if (decision == null || decision.isBlank()) {
+            return "";
+        }
+        return switch (decision.strip().toUpperCase(Locale.ROOT).replace('-', '_')) {
+            case "APPROVE", "APPROVED", "ACCEPT", "ACCEPTED" -> "APPROVED";
+            case "REJECT", "REJECTED", "DENY", "DENIED" -> "REJECTED";
+            case "DISCARD", "DISCARDED", "DISMISS", "DISMISSED" -> "DISCARDED";
             default -> "";
         };
     }

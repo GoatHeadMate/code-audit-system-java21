@@ -237,6 +237,85 @@ class JsonlAuditMemoryServiceTest {
     }
 
     @Test
+    void approvesRuleCandidateAndWritesApprovedRulePrior() throws Exception {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        Map<String, Object> finding = Map.of(
+                "rule_id", "ssrf-urlconnection",
+                "vuln_type", "SSRF",
+                "verdict", "CONFIRM",
+                "file_path", "src/main/java/demo/ProxyController.java",
+                "http_path", "/proxy",
+                "start_line", 42
+        );
+        memory.rememberFindings(
+                new AuditJob("gate-job1", "java"),
+                tempDir.resolve("source"),
+                Map.of("dependencies", List.of()),
+                List.of(finding)
+        );
+        memory.rememberFeedback(
+                new AuditJob("gate-job2", "java"),
+                0,
+                finding,
+                "CONFIRM",
+                "manual PoC",
+                "expert"
+        );
+
+        var candidates = memory.listRuleCandidates();
+        String candidateId = candidates.stream()
+                .filter(candidate -> "SSRF".equals(candidate.get("vuln_type")))
+                .findFirst()
+                .orElseThrow()
+                .get("candidate_id")
+                .toString();
+        assertThat(candidates)
+                .anySatisfy(candidate ->
+                        assertThat(candidate).containsEntry("status", "CANDIDATE"));
+
+        var decided = memory.decideRuleCandidate(
+                candidateId, "APPROVE", "verified by reviewer", "alice");
+        assertThat(decided).isPresent();
+        assertThat(decided.get()).containsEntry("status", "APPROVED");
+
+        Path approvedFile = tempDir.resolve("audit-memory")
+                .resolve("approved-rules.jsonl");
+        assertThat(approvedFile).isRegularFile();
+        assertThat(Files.readString(approvedFile))
+                .contains("\"vuln_type\":\"SSRF\"")
+                .contains("approved-rule-prior-only");
+
+        var priors = memory.recallPriors(
+                new AuditJob("gate-job3", "java"),
+                "ssrf",
+                "general",
+                List.of(Map.of(
+                        "path", "/proxy",
+                        "file_path", "src/main/java/demo/ProxyController.java"
+                )),
+                List.of()
+        );
+        assertThat(priors)
+                .isNotEmpty()
+                .allSatisfy(prior ->
+                        assertThat(prior.get("policy").toString())
+                                .contains("re-validate"));
+    }
+
+    @Test
+    void returnsEmptyForUnknownRuleCandidateDecision() {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(),
+                properties()
+        );
+        assertThat(memory.decideRuleCandidate(
+                "does-not-exist", "APPROVE", "", "alice")).isEmpty();
+    }
+
+    @Test
     void recallReadsOnlyRecentMemoryLines() throws Exception {
         JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
                 new ObjectMapper(),
