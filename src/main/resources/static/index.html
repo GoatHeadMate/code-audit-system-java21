@@ -1114,6 +1114,12 @@ function mkRuleCandidate(c) {
     DISCARDED:'text-slate-400 bg-slate-50 border-slate-200',
     CANDIDATE:'text-amber-600 bg-amber-50 border-amber-200'
   }[status] || 'text-slate-500 bg-slate-100 border-slate-200';
+  const decided = status !== 'CANDIDATE';
+  const statusLabel = { APPROVED:'已批准', REJECTED:'已拒绝', DISCARDED:'已废弃' }[status] || status;
+  const actionPrefix = decided ? '改为' : '';
+  const approveButton = status === 'APPROVED' ? '' : `<button onclick="decideRule('${esc(id)}','APPROVE',this)" class="text-xs px-2.5 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">${actionPrefix}批准</button>`;
+  const rejectButton = status === 'REJECTED' ? '' : `<button onclick="decideRule('${esc(id)}','REJECT',this)" class="text-xs px-2.5 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors">${actionPrefix}拒绝</button>`;
+  const discardButton = status === 'DISCARDED' ? '' : `<button onclick="decideRule('${esc(id)}','DISCARD',this)" class="text-xs px-2.5 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">${actionPrefix}废弃</button>`;
   return `
     <div class="bg-white border border-slate-200 rounded-xl p-4">
       <div class="flex items-start justify-between gap-2 mb-2">
@@ -1129,10 +1135,11 @@ function mkRuleCandidate(c) {
         ${c.http_path?`<span>路径: <code class="font-mono">${esc(c.http_path)}</code></span>`:''}
         <span>观察 ${c.observed_finding_count??0} · 确认 ${c.confirm_count??0} · 误报 ${c.false_positive_count??0}</span>
       </div>
-      <div class="rule-actions flex items-center gap-2">
-        <button onclick="decideRule('${esc(id)}','APPROVE',this)" class="text-xs px-2.5 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">批准</button>
-        <button onclick="decideRule('${esc(id)}','REJECT',this)" class="text-xs px-2.5 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors">拒绝</button>
-        <button onclick="decideRule('${esc(id)}','DISCARD',this)" class="text-xs px-2.5 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">废弃</button>
+      <div class="rule-actions flex items-center flex-wrap gap-2">
+        ${decided ? `<span class="text-xs text-slate-500 mr-1">当前：${esc(statusLabel)}</span>` : ''}
+        ${approveButton}
+        ${rejectButton}
+        ${discardButton}
       </div>
     </div>`;
 }
