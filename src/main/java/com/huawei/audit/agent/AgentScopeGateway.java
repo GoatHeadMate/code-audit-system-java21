@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -97,7 +98,7 @@ public class AgentScopeGateway implements ClaudeGateway {
                 eventConsumer
         );
 
-        try (HarnessAgent agent = baseBuilder(workingDirectory, declarations)
+        HarnessAgent.Builder builder = baseBuilder(workingDirectory, declarations)
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
                 .sysPrompt("You are a white-box security audit supervisor. Follow the user prompt exactly.")
@@ -105,8 +106,13 @@ public class AgentScopeGateway implements ClaudeGateway {
                         skillsDirectory(workingDirectory),
                         false,
                         AUDIT_SKILL_SOURCE))
-                .disableMemoryTools()
-                .build()) {
+                .disableMemoryTools();
+        List<String> skillIds = enabledSkillIds(agents);
+        if (!skillIds.isEmpty()) {
+            builder.enableSkills(skillIds.toArray(String[]::new));
+        }
+
+        try (HarnessAgent agent = builder.build()) {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
                     .doOnNext(events::handle)
@@ -247,6 +253,19 @@ public class AgentScopeGateway implements ClaudeGateway {
                     }
                     return builder.build();
                 })
+                .toList();
+    }
+
+    static List<String> enabledSkillIds(Map<String, AgentDef> agents) {
+        if (agents == null || agents.isEmpty()) {
+            return List.of();
+        }
+        return agents.values().stream()
+                .flatMap(agent -> agent.skills() == null
+                        ? Stream.empty()
+                        : agent.skills().stream())
+                .filter(skill -> skill != null && !skill.isBlank())
+                .distinct()
                 .toList();
     }
 

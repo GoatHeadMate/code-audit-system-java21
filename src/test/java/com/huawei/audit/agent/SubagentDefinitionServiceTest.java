@@ -30,7 +30,10 @@ class SubagentDefinitionServiceTest {
                 .contains("name: audit-sql-injection")
                 .contains("description: >")
                 .contains("Use this skill to validate candidate paths whose sink category is SQL execution")
-                .contains("# SQL 注入判断知识");
+                .contains("# SQL 注入判断知识")
+                .contains("## Endpoint Review Surface")
+                .contains("poc_plan")
+                .contains("STATIC_POC_PLAN_ONLY");
         assertThat(Files.readString(skill))
                 .doesNotContain("# White-Box Judgment Rules");
         assertThat(result).containsEntry("sql_injection", "audit-sql-injection");
