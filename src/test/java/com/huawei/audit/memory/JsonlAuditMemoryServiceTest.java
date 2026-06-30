@@ -401,6 +401,83 @@ class JsonlAuditMemoryServiceTest {
     }
 
     @Test
+    void autoGateApprovesHighConfidenceCandidate() {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(), properties());
+        feedbackConfirms(memory, List.of("ag-j1", "ag-j2", "ag-j3"));
+        Map<String, Object> rule = ssrfCandidate(memory);
+        assertThat(rule)
+                .containsEntry("status", "APPROVED")
+                .containsEntry("auto_approved", true);
+        assertThat(rule.get("decision_reviewer")).isEqualTo("auto-gate");
+    }
+
+    @Test
+    void autoGateKeepsApprovedOnSingleFalsePositive() {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(), properties());
+        feedbackConfirms(memory, List.of("ag-j1", "ag-j2", "ag-j3"));
+        memory.rememberFeedback(new AuditJob("ag-fp1", "java"), 0,
+                ssrfFinding(), "FALSE_POSITIVE", "", "x");
+        // 单次误报 < 阈值，不撤销自动批准
+        assertThat(ssrfCandidate(memory)).containsEntry("status", "APPROVED");
+    }
+
+    @Test
+    void autoGateRejectsAutoApprovedRuleOnRepeatedFalsePositives() {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(), properties());
+        feedbackConfirms(memory, List.of("ag-j1", "ag-j2", "ag-j3"));
+        memory.rememberFeedback(new AuditJob("ag-fp1", "java"), 0,
+                ssrfFinding(), "FALSE_POSITIVE", "", "x");
+        memory.rememberFeedback(new AuditJob("ag-fp2", "java"), 0,
+                ssrfFinding(), "FALSE_POSITIVE", "", "x");
+        // 误报达到阈值，撤销自动批准
+        assertThat(ssrfCandidate(memory))
+                .containsEntry("status", "REJECTED")
+                .containsEntry("auto_rejected", true);
+    }
+
+    @Test
+    void autoGateDoesNotRejectHumanApprovedRule() {
+        JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
+                new ObjectMapper(), properties());
+        memory.rememberFeedback(new AuditJob("hm-j1", "java"), 0,
+                ssrfFinding(), "CONFIRM", "", "alice");
+        String id = ssrfCandidate(memory).get("candidate_id").toString();
+        memory.decideRuleCandidate(id, "APPROVE", "human verified", "alice");
+        memory.rememberFeedback(new AuditJob("hm-fp1", "java"), 0,
+                ssrfFinding(), "FALSE_POSITIVE", "", "x");
+        memory.rememberFeedback(new AuditJob("hm-fp2", "java"), 0,
+                ssrfFinding(), "FALSE_POSITIVE", "", "x");
+        // 人工批准的规则不被 auto-gate 撤销
+        assertThat(ssrfCandidate(memory)).containsEntry("status", "APPROVED");
+    }
+
+    private void feedbackConfirms(
+            JsonlAuditMemoryService memory, List<String> jobIds) {
+        for (String jobId : jobIds) {
+            memory.rememberFeedback(new AuditJob(jobId, "java"), 0,
+                    ssrfFinding(), "CONFIRM", "", "expert");
+        }
+    }
+
+    private Map<String, Object> ssrfFinding() {
+        return Map.of(
+                "rule_id", "ssrf-urlconnection",
+                "vuln_type", "SSRF",
+                "file_path", "src/main/java/demo/ProxyController.java",
+                "http_path", "/proxy");
+    }
+
+    private Map<String, Object> ssrfCandidate(JsonlAuditMemoryService memory) {
+        return memory.listRuleCandidates().stream()
+                .filter(c -> "SSRF".equals(c.get("vuln_type")))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    @Test
     void appendsAgentRunTelemetryForSchedulingEvolution() throws Exception {
         JsonlAuditMemoryService memory = new JsonlAuditMemoryService(
                 new ObjectMapper(),

@@ -33,6 +33,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
     private static final int SCHEMA_VERSION = 1;
     private static final int MAX_RECALL_PRIORS = 8;
     private static final int MAX_RECALL_LINES = 5_000;
+    private static final int AUTO_APPROVE_MIN_CONFIRMS = 3;
+    private static final int AUTO_APPROVE_MIN_JOBS = 2;
+    private static final int AUTO_REJECT_MIN_FALSE_POSITIVES = 2;
     private static final int MAX_INDEX_RECALL_ROWS = MAX_RECALL_LINES * 3;
     private static final int MIN_RECALL_SCORE = 2;
     private static final String MEMORY_SOURCE = "findings.jsonl";
@@ -837,6 +840,9 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 .map(RuleCandidateAccumulator::toMap)
                 .map(candidate -> applyRuleDecision(candidate, decisions))
                 .toList();
+        for (Map<String, Object> candidate : output) {
+            autoGateIfQualified(candidate);
+        }
         Files.createDirectories(ruleCandidatesFile.getParent());
         StringBuilder lines = new StringBuilder();
         for (Map<String, Object> candidate : output) {
@@ -847,6 +853,80 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 StandardOpenOption.CREATE,
                 StandardOpenOption.TRUNCATE_EXISTING);
         writeApprovedRules(output);
+    }
+
+    // 阈值自动 gate：高置信候选自动批准；auto-gate 批准后若出现误报证据则自动撤销。
+    // 批准后的规则仍只作先验、要求源码复验；人工决策优先于 auto-gate。
+    private void autoGateIfQualified(Map<String, Object> candidate) throws Exception {
+        if (qualifiesAutoReject(candidate)) {
+            appendAutoDecision(candidate, "REJECTED",
+                    "auto-rejected: false_positive_count="
+                            + intField(candidate, "false_positive_count"),
+                    "auto_rejected");
+            return;
+        }
+        if (qualifiesAutoApprove(candidate)) {
+            appendAutoDecision(candidate, "APPROVED",
+                    "auto-approved: confirm_count>="
+                            + AUTO_APPROVE_MIN_CONFIRMS
+                            + ", false_positive_count=0, job_count>="
+                            + AUTO_APPROVE_MIN_JOBS,
+                    "auto_approved");
+        }
+    }
+
+    private void appendAutoDecision(
+            Map<String, Object> candidate,
+            String decision,
+            String rationale,
+            String marker
+    ) throws Exception {
+        String candidateId = candidate.getOrDefault("candidate_id", "").toString();
+        if (candidateId.isBlank()) {
+            return;
+        }
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("schema_version", SCHEMA_VERSION);
+        event.put("event_type", "rule_candidate_decision");
+        event.put("recorded_at", Instant.now().toString());
+        event.put("candidate_id", candidateId);
+        event.put("decision", decision);
+        event.put("rationale", rationale);
+        event.put("reviewer", "auto-gate");
+        event.put("memory_policy",
+                "auto-gated-rule-decision; approved rules remain priors only");
+        Files.createDirectories(ruleDecisionsFile.getParent());
+        Files.writeString(ruleDecisionsFile,
+                objectMapper.writeValueAsString(event) + System.lineSeparator(),
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        indexEventBestEffort(RULE_DECISIONS_SOURCE, event);
+        candidate.put("status", decision);
+        candidate.put("decision_rationale", rationale);
+        candidate.put("decision_reviewer", "auto-gate");
+        candidate.put("decided_at", event.get("recorded_at"));
+        candidate.put(marker, true);
+    }
+
+    private boolean qualifiesAutoApprove(Map<String, Object> candidate) {
+        if (!"CANDIDATE".equals(candidate.getOrDefault("status", "").toString())) {
+            return false;
+        }
+        return intField(candidate, "confirm_count") >= AUTO_APPROVE_MIN_CONFIRMS
+                && intField(candidate, "false_positive_count") == 0
+                && intField(candidate, "job_count") >= AUTO_APPROVE_MIN_JOBS;
+    }
+
+    private boolean qualifiesAutoReject(Map<String, Object> candidate) {
+        // 仅撤销 auto-gate 自动批准的规则（人工批准的不动）；且要求误报 >= 阈值，
+        // 防止单次手滑误报就撤掉一条跨多项目、确认多次的好规则。
+        return "APPROVED".equals(candidate.getOrDefault("status", "").toString())
+                && "auto-gate".equals(candidate.getOrDefault("decision_reviewer", "").toString())
+                && intField(candidate, "false_positive_count") >= AUTO_REJECT_MIN_FALSE_POSITIVES;
+    }
+
+    private int intField(Map<String, Object> candidate, String key) {
+        Object value = candidate.get(key);
+        return value instanceof Number number ? number.intValue() : 0;
     }
 
     private Map<String, JsonNode> latestRuleDecisions() throws Exception {
@@ -1441,7 +1521,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             candidate.put("suggested_agent_guidance", guidance());
             candidate.put("provenance", provenance);
             candidate.put("policy",
-                    "Candidate only: requires human approval before becoming an active rule.");
+                    "Candidate only until automatic or human gate approves it; approved rules remain non-binding priors.");
             return candidate;
         }
 
