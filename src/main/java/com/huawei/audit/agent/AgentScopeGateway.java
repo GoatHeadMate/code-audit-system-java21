@@ -8,7 +8,6 @@ import io.agentscope.core.model.AnthropicChatModel;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
-import io.agentscope.core.skill.repository.FileSystemSkillRepository;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import io.agentscope.harness.agent.subagent.WorkspaceMode;
@@ -18,7 +17,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -31,7 +29,6 @@ public class AgentScopeGateway implements ClaudeGateway {
     private static final String USER_ID = "code-audit";
     private static final int MAX_RETRIES = 2;
     private static final long RETRY_BASE_DELAY_MS = 30_000L;
-    static final String AUDIT_SKILL_SOURCE = "audit";
 
     private final AgentScopeProperties properties;
 
@@ -98,21 +95,12 @@ public class AgentScopeGateway implements ClaudeGateway {
                 eventConsumer
         );
 
-        HarnessAgent.Builder builder = baseBuilder(workingDirectory, declarations)
+        try (HarnessAgent agent = baseBuilder(workingDirectory, declarations)
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
                 .sysPrompt("You are a white-box security audit supervisor. Follow the user prompt exactly.")
-                .skillRepository(new FileSystemSkillRepository(
-                        skillsDirectory(workingDirectory),
-                        false,
-                        AUDIT_SKILL_SOURCE))
-                .disableMemoryTools();
-        List<String> skillIds = enabledSkillIds(agents);
-        if (!skillIds.isEmpty()) {
-            builder.enableSkills(skillIds.toArray(String[]::new));
-        }
-
-        try (HarnessAgent agent = builder.build()) {
+                .disableMemoryTools()
+                .build()) {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
                     .doOnNext(events::handle)
@@ -256,19 +244,6 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .toList();
     }
 
-    static List<String> enabledSkillIds(Map<String, AgentDef> agents) {
-        if (agents == null || agents.isEmpty()) {
-            return List.of();
-        }
-        return agents.values().stream()
-                .flatMap(agent -> agent.skills() == null
-                        ? Stream.empty()
-                        : agent.skills().stream())
-                .filter(skill -> skill != null && !skill.isBlank())
-                .distinct()
-                .toList();
-    }
-
     private RuntimeContext runtimeContext(String prefix) {
         return RuntimeContext.builder()
                 .userId(USER_ID)
@@ -278,13 +253,6 @@ public class AgentScopeGateway implements ClaudeGateway {
 
     private Duration effectiveTimeout(Duration requested) {
         return requested == null ? properties.timeout() : requested;
-    }
-
-    private Path skillsDirectory(Path workingDirectory) {
-        return workingDirectory.toAbsolutePath()
-                .normalize()
-                .resolve(".claude")
-                .resolve("skills");
     }
 
     private Duration supervisorTotalTimeout(List<SubagentDeclaration> declarations) {

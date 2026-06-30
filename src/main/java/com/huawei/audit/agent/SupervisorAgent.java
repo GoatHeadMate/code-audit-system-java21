@@ -323,9 +323,6 @@ public class SupervisorAgent {
             }
             String baseHunter = baseHunterName(hunter);
             String skillName = skillManifest.get(baseHunter);
-            List<String> skills = skillName == null
-                    ? List.of()
-                    : List.of(skillId(skillName));
             String skillRef = skillName == null ? "(none)" : skillName;
             String skillRules = skillContent(workDirectory, skillName);
             String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
@@ -340,8 +337,7 @@ public class SupervisorAgent {
                             + " vulnerabilities in the target project",
                     agentPrompt,
                     readOnlyTools,
-                    null,
-                    skills
+                    null
             ));
         }
         return agents;
@@ -393,10 +389,6 @@ public class SupervisorAgent {
         String withoutBatch = batchIdx >= 0 ? hunter.substring(0, batchIdx) : hunter;
         int teamIdx = withoutBatch.indexOf("_team_");
         return teamIdx >= 0 ? withoutBatch.substring(0, teamIdx) : withoutBatch;
-    }
-
-    private static String skillId(String skillName) {
-        return skillName + "_" + AgentScopeGateway.AUDIT_SKILL_SOURCE;
     }
 
     private String systemPrompt() {

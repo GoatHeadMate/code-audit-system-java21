@@ -274,7 +274,6 @@ class SupervisorAgentTest {
         verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
         ClaudeGateway.AgentDef agent = agentsCaptor.getValue().get("sql_injection");
 
-        assertThat(agent.skills()).containsExactly("audit-sql-injection_audit");
         assertThat(agent.tools()).containsExactly(
                 "read_file",
                 "glob_files",
