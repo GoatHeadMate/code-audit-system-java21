@@ -112,3 +112,24 @@ A valid finding should cite:
 `rule_id` values: `upload-no-validation`, `upload-mime-only`,
 `upload-web-root`, `upload-path-traversal`, `pathtrav-taint`,
 `pathtrav-no-canon`, `pathtrav-zipslip`, `pathtrav-symlink`.
+
+## Output Contract
+
+Use EXACTLY one of these `vuln_type` values (uppercase, underscores, no spaces,
+no invented names): `PATH_TRAVERSAL`, `FILE_UPLOAD`, `ZIP_SLIP`. Cross-API
+combinations use `ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`:
+
+- `pathtrav-taint` / `pathtrav-no-canon` / `pathtrav-symlink` -> `PATH_TRAVERSAL`
+- `pathtrav-zipslip` -> `ZIP_SLIP`
+- `upload-no-validation` / `upload-mime-only` / `upload-web-root` /
+  `upload-path-traversal` -> `FILE_UPLOAD`
+
+Reporting granularity — one finding per distinct filesystem sink.
+
+Output anti-patterns:
+
+- BAD: one sink as several findings, or one upload double-counted as upload + traversal.
+- BAD: free-form `vuln_type` such as `PATH_TRAVERSAL_FILE_WRITE` or invented names.
+- BAD: self-numbered `rule_id`; use the vocabulary above.

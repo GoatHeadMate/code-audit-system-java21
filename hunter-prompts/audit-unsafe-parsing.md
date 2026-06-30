@@ -118,3 +118,24 @@ A valid finding should cite:
 
 `rule_id` values: `deser-native`, `deser-json`, `deser-xml`, `deser-yaml`,
 `deser-api`, `xxe-taint`, `xxe-unsafe-factory`.
+
+## Output Contract
+
+Use EXACTLY one of these `vuln_type` values (uppercase, underscores, no spaces,
+no invented names): `DESERIALIZATION`, `XXE`. Cross-API combinations use
+`ATTACK_CHAIN`. Do NOT emit variants like `NATIVE_DESERIALIZATION` or
+`UNSAFE_PARSING_OR_DESERIALIZATION`.
+
+`rule_id` -> `vuln_type`:
+
+- `deser-native` / `deser-json` / `deser-yaml` / `deser-api` /
+  `deser-xml` -> `DESERIALIZATION`
+- `xxe-taint` / `xxe-unsafe-factory` -> `XXE`
+
+Reporting granularity — one finding per distinct parser/deserializer sink.
+
+Output anti-patterns:
+
+- BAD: one sink as several findings, or two distinct parsers merged.
+- BAD: variant `vuln_type` such as `NATIVE_DESERIALIZATION` or `UNSAFE_PARSING_OR_DESERIALIZATION`.
+- BAD: self-numbered `rule_id`; use the vocabulary above.

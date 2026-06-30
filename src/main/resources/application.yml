@@ -19,7 +19,7 @@ audit:
   agentscope:
     provider: anthropic
     model: glm-5.2
-    api-key: c31c7f9db0244386a997ce67676d631a.F5shO2M8TTq9ejNP
+    api-key: sk_
     base-url: https://open.bigmodel.cn/api/anthropic
     max-iters: ${AGENTSCOPE_MAX_ITERS:80}
     timeout: ${AGENTSCOPE_TIMEOUT:30m}

@@ -124,3 +124,25 @@ A valid component finding should cite:
 `rule_id` values: `actuator-no-security`, `actuator-exposed-no-auth`,
 `actuator-custom-endpoint`, `h2-console-exposed`, `h2-init-script`,
 `log4shell-taint`, `log4j-version-vulnerable`.
+
+## Output Contract
+
+Use EXACTLY one of these `vuln_type` values (uppercase, underscores, no spaces,
+no invented names): `COMPONENT_VULN`, `ACTUATOR_EXPOSURE`, `LOG4SHELL`.
+Cross-API combinations use `ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`:
+
+- `actuator-no-security` / `actuator-exposed-no-auth` /
+  `actuator-custom-endpoint` -> `ACTUATOR_EXPOSURE`
+- `h2-console-exposed` / `h2-init-script` -> `COMPONENT_VULN`
+- `log4shell-taint` / `log4j-version-vulnerable` -> `LOG4SHELL`
+
+Reporting granularity — one finding per component/configuration root cause (one
+Actuator exposure, one vulnerable Log4j path, one H2 console). List affected
+endpoints/config keys in evidence rather than emitting one finding per route.
+
+Output anti-patterns:
+
+- BAD: free-form `vuln_type` or invented names.
+- BAD: self-numbered `rule_id`; use the vocabulary above.

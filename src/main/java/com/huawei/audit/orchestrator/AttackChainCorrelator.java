@@ -18,7 +18,11 @@ public class AttackChainCorrelator {
     private static final Map<String, Set<String>> TYPE_ALIASES = Map.of(
             "MISSING_AUTH", Set.of(
                     "MISSING_AUTH", "UNAUTHORIZED_ACTION",
-                    "AUTHORIZATION_BYPASS", "VERTICAL_PRIVILEGE_ESCALATION"
+                    "AUTHORIZATION_BYPASS", "VERTICAL_PRIVILEGE_ESCALATION",
+                    "BROKEN_ACCESS_CONTROL", "AUTH_BYPASS"
+            ),
+            "SSTI", Set.of(
+                    "SSTI", "EXPRESSION_INJECTION", "TEMPLATE_INJECTION"
             ),
             "WEAK_WHITELIST", Set.of("WEAK_WHITELIST", "SSRF")
     );
@@ -58,7 +62,7 @@ public class AttackChainCorrelator {
             new ChainRule("chain-ssrf-credential-injection",
                     "SSRF + Credential Auto-Injection -> Authenticated SSRF",
                     Set.of("SSRF"),
-                    Set.of("AUTHORIZATION_BYPASS", "UNAUTHORIZED_ACTION"),
+                    Set.of("MISSING_AUTH"),
                     "CRITICAL", 0.80,
                     "SSRF proxy automatically injects admin credentials into forwarded requests, "
                     + "upgrading unauthenticated SSRF to authenticated admin-level access on internal APIs."),

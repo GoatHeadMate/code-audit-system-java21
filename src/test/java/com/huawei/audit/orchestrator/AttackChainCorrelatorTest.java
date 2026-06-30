@@ -85,4 +85,56 @@ class AttackChainCorrelatorTest {
                 .extracting(finding -> finding.get("rule_id"))
                 .contains("chain-noauth-cmdinj");
     }
+
+    @Test
+    void correlatesBrokenAccessControlAsMissingAuth() {
+        var findings = List.of(
+                Map.<String, Object>of(
+                        "rule_id", "authz-unprotected",
+                        "vuln_type", "BROKEN_ACCESS_CONTROL",
+                        "file_path", "src/main/java/com/acme/Admin.java",
+                        "start_line", 5,
+                        "confidence", 0.9
+                ),
+                Map.<String, Object>of(
+                        "rule_id", "cmd-1",
+                        "vuln_type", "COMMAND_INJECTION",
+                        "file_path", "src/main/java/com/acme/Exec.java",
+                        "start_line", 20,
+                        "confidence", 0.9
+                )
+        );
+
+        var chains = new AttackChainCorrelator().correlate(findings, "com.acme");
+
+        assertThat(chains)
+                .extracting(finding -> finding.get("rule_id"))
+                .contains("chain-noauth-cmdinj");
+    }
+
+    @Test
+    void correlatesExpressionInjectionAsSsti() {
+        var findings = List.of(
+                Map.<String, Object>of(
+                        "rule_id", "ssti-spel",
+                        "vuln_type", "EXPRESSION_INJECTION",
+                        "file_path", "src/main/java/com/acme/Spel.java",
+                        "start_line", 5,
+                        "confidence", 0.9
+                ),
+                Map.<String, Object>of(
+                        "rule_id", "cmd-1",
+                        "vuln_type", "COMMAND_INJECTION",
+                        "file_path", "src/main/java/com/acme/Exec.java",
+                        "start_line", 20,
+                        "confidence", 0.9
+                )
+        );
+
+        var chains = new AttackChainCorrelator().correlate(findings, "com.acme");
+
+        assertThat(chains)
+                .extracting(finding -> finding.get("rule_id"))
+                .contains("chain-ssti-cmdinj");
+    }
 }

@@ -84,6 +84,32 @@ trusted internal redirectors.
 Relative-path validation must reject `//host`, `\host`, encoded absolute URLs,
 mixed slash/backslash variants, and scheme-relative URLs.
 
+## CORS Conditions
+
+| Condition | Verdict | Severity |
+|---|---|---|
+| Response reflects the request `Origin` into `Access-Control-Allow-Origin` together with `Access-Control-Allow-Credentials: true` | Confirm | HIGH |
+| Origin allowlist uses `startsWith` / `contains` / loose regex that also matches attacker domains (`trusted.com.evil.com`, `eviltrusted.com`) | Confirm | HIGH |
+| `null` origin is allowed together with credentials | Confirm | MEDIUM/HIGH |
+| `Access-Control-Allow-Origin: *` with `Allow-Credentials: true` | Confirm (note browsers block this exact combo) | MEDIUM |
+| Exact-match origin allowlist, or no credentials and only public data | Suppress | — |
+
+CORS is high impact only when credentials/cookies are allowed
+(`Allow-Credentials: true`) or the response body carries sensitive data. A
+wildcard origin exposing only public data is informational.
+
+## JSONP Conditions
+
+| Condition | Verdict | Severity |
+|---|---|---|
+| Endpoint returns sensitive/ambient-auth data wrapped in a request-controlled `callback` parameter served as JavaScript | Confirm | HIGH |
+| `callback` value is reflected into the response body without identifier validation | Confirm | MEDIUM/HIGH |
+| Callback strictly validated (`^[A-Za-z0-9_]+$`) AND only non-sensitive public data | Suppress | — |
+
+JSONP leaks data cross-origin because `<script src=...>` sends the victim's
+cookies. Impact depends on whether the wrapped data is sensitive and whether the
+endpoint relies on ambient cookie auth.
+
 ## False Positive Suppressors
 
 Do not report when:
@@ -115,4 +141,31 @@ A valid finding should cite:
 
 `rule_id` values: `xss-reflected`, `xss-stored`, `xss-unescaped`,
 `xss-no-csp`, `crlf-header`, `crlf-redirect`, `open-redirect-taint`,
-`open-redirect-unvalidated`.
+`open-redirect-unvalidated`, `cors-reflect-origin`, `cors-weak-allowlist`,
+`cors-null-origin`, `cors-wildcard-credentials`, `jsonp-callback-injection`,
+`jsonp-sensitive-data`.
+
+## Output Contract
+
+Use EXACTLY one of these `vuln_type` values (uppercase, underscores, no spaces,
+no invented names): `XSS`, `CRLF_INJECTION`, `OPEN_REDIRECT`, `CORS_MISCONFIG`,
+`JSONP_HIJACK`. Cross-API combinations use `ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`:
+
+- `xss-reflected` / `xss-stored` / `xss-unescaped` / `xss-no-csp` -> `XSS`
+- `crlf-header` / `crlf-redirect` -> `CRLF_INJECTION`
+- `open-redirect-taint` / `open-redirect-unvalidated` -> `OPEN_REDIRECT`
+- `cors-reflect-origin` / `cors-weak-allowlist` / `cors-null-origin` /
+  `cors-wildcard-credentials` -> `CORS_MISCONFIG`
+- `jsonp-callback-injection` / `jsonp-sensitive-data` -> `JSONP_HIJACK`
+
+Reporting granularity — one finding per distinct output sink (one reflected
+parameter at one sink, one redirect, one misconfigured CORS policy, one JSONP
+endpoint). Do not split one sink into several findings.
+
+Output anti-patterns:
+
+- BAD: free-form `vuln_type` such as `OPEN REDIRECT` or `CORS MISCONFIGURATION` (with spaces).
+- BAD: one sink reported as several findings.
+- BAD: self-numbered `rule_id`; use the vocabulary above.

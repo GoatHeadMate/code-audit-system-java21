@@ -64,6 +64,38 @@ Global security policy must match the exact route, HTTP method, filter-chain
 order, and exclusion rules. `permitAll`, anonymous matchers, static exclusions,
 or earlier filter chains may bypass later authorization rules.
 
+## CSRF Conditions
+
+| Condition | Verdict | Severity |
+|---|---|---|
+| Global `csrf().disable()` is set and state-changing endpoints (POST/PUT/DELETE) exist with no token/SameSite defense | Confirm | MEDIUM/HIGH |
+| State-changing endpoint accepts cookie/session-authenticated requests with no CSRF token and no SameSite cookie | Confirm | MEDIUM |
+| CSRF token is present but never validated server-side, or is global/predictable | Confirm | MEDIUM |
+| Per-request CSRF token validated, or auth cookies are `SameSite=Lax/Strict` | Suppress | — |
+| Stateless API authenticated only by `Authorization`/JWT header (no ambient cookie) | Suppress (CSRF not applicable) | — |
+
+CSRF needs an ambient credential (cookie/session) the browser auto-sends.
+Token-in-header APIs are not CSRF-exploitable — do not report them.
+
+## JWT / Token Conditions
+
+| Condition | Verdict | Severity |
+|---|---|---|
+| JWT verified with a hardcoded or weak secret visible in source/config | Confirm | HIGH |
+| `alg:none` accepted, or algorithm not pinned (RS256->HS256 confusion possible) | Confirm | HIGH |
+| Claims are trusted without verifying the signature at all | Confirm | CRITICAL |
+| Expiration / issuer / audience not checked on a security-bearing token | Confirm | MEDIUM |
+| Strong secret from secure config + algorithm pinned + signature and expiry verified | Suppress | — |
+
+## Cookie Security Conditions
+
+| Condition | Verdict | Severity |
+|---|---|---|
+| Session/auth cookie created without `HttpOnly` | Confirm | LOW/MEDIUM |
+| Session/auth cookie created without `Secure` while the app serves HTTPS | Confirm | LOW/MEDIUM |
+| Sensitive cookie without `SameSite` (amplifies CSRF) | Confirm | LOW |
+| Non-sensitive cookie, or `HttpOnly`+`Secure`+`SameSite` set appropriately | Suppress | — |
+
 ## False Positive Suppressors
 
 Do not report when any of these are clearly effective:
@@ -104,4 +136,37 @@ A valid authorization finding should cite:
 
 `rule_id` values: `authz-unprotected`, `authz-idor`, `authz-vertical`,
 `authz-missing-config`, `authz-debug-bypass`, `authz-jaxrs-unprotected`,
-`authz-tenant-bypass`, `authz-authenticated-only`.
+`authz-tenant-bypass`, `authz-authenticated-only`, `csrf-disabled`,
+`csrf-no-token`, `jwt-weak-secret`, `jwt-alg-none`, `jwt-no-verify`,
+`cookie-no-httponly`, `cookie-no-secure`.
+
+## Output Contract
+
+Use EXACTLY one of these `vuln_type` values (uppercase, underscores, no spaces,
+no invented names): `BROKEN_ACCESS_CONTROL`, `IDOR`, `AUTH_BYPASS`, `CSRF`,
+`JWT_WEAKNESS`, `COOKIE_SECURITY`. Cross-API combinations use `ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`:
+
+- `authz-unprotected` / `authz-vertical` / `authz-authenticated-only` /
+  `authz-missing-config` -> `BROKEN_ACCESS_CONTROL`
+- `authz-idor` / `authz-tenant-bypass` -> `IDOR`
+- `authz-debug-bypass` / `authz-jaxrs-unprotected` -> `AUTH_BYPASS`
+- `csrf-disabled` / `csrf-no-token` -> `CSRF`
+- `jwt-weak-secret` / `jwt-alg-none` / `jwt-no-verify` -> `JWT_WEAKNESS`
+- `cookie-no-httponly` / `cookie-no-secure` -> `COOKIE_SECURITY`
+
+Reporting granularity — one finding = one authorization root cause:
+
+- When several endpoints share ONE root cause (the same `permitAll` segment, one
+  missing global filter, one `csrf().disable()`), emit ONE finding and list every
+  affected route in an `affected_endpoints` array. Do NOT emit one finding per URL
+  under the same root cause.
+- Genuinely distinct root causes (different misconfig, different missing check)
+  remain separate findings.
+
+Output anti-patterns:
+
+- BAD: one finding per endpoint when they share a single permitAll/config root cause.
+- BAD: free-form `vuln_type` such as `BROKEN ACCESS CONTROL` (with a space) or invented names.
+- BAD: self-numbered `rule_id` like `AUTHZ-BAC-001`; use the vocabulary above.

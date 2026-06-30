@@ -126,4 +126,30 @@ A valid finding should cite:
 `rule_id` values: `cmdinj-exec-string`, `cmdinj-exec-args`,
 `cmdinj-procbuilder`, `cmdinj-bash-concat`, `cmdinj-template-replace`,
 `cmdinj-config-template`, `ssti-spel`, `ssti-mvel`, `ssti-freemarker`,
-`ssti-velocity`, `ssti-ognl`, `cmdinj-option-injection`.
+`ssti-velocity`, `ssti-ognl`, `cmdinj-option-injection`, `script-engine-eval`.
+
+## Output Contract
+
+Use EXACTLY one of these `vuln_type` values (uppercase, underscores, no spaces,
+no invented names): `COMMAND_INJECTION`, `SCRIPT_INJECTION`,
+`EXPRESSION_INJECTION`, `TEMPLATE_INJECTION`. Cross-API combinations use
+`ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`:
+
+- `cmdinj-exec-string` / `cmdinj-exec-args` / `cmdinj-procbuilder` /
+  `cmdinj-bash-concat` / `cmdinj-option-injection` / `cmdinj-template-replace` /
+  `cmdinj-config-template` -> `COMMAND_INJECTION`
+- `ssti-spel` / `ssti-mvel` / `ssti-ognl` -> `EXPRESSION_INJECTION`
+- `ssti-freemarker` / `ssti-velocity` -> `TEMPLATE_INJECTION`
+- `script-engine-eval` (JS/Nashorn/Groovy `ScriptEngine`) -> `SCRIPT_INJECTION`
+
+Reporting granularity — one finding per distinct execution sink. Each
+independently exploitable command/expression/template/script sink is its own
+finding; do not merge two different sinks, and do not split one sink into several.
+
+Output anti-patterns:
+
+- BAD: one sink reported as several findings, or two distinct sinks merged into one.
+- BAD: free-form `vuln_type` such as `COMMAND EXECUTION` (space) or invented names.
+- BAD: self-numbered `rule_id`; use the vocabulary above.

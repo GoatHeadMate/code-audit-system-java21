@@ -99,3 +99,20 @@ A valid SQL injection finding should cite:
 - Suppressors considered and why they do not apply.
 
 `rule_id` values: `sqli-taint`, `sqli-mybatis-unsafe`, `sqli-second-order`.
+
+## Output Contract
+
+Use EXACTLY this `vuln_type` value (uppercase, underscores, no spaces):
+`SQL_INJECTION`. Cross-API combinations use `ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`: `sqli-taint` / `sqli-mybatis-unsafe` /
+`sqli-second-order` -> `SQL_INJECTION`.
+
+Reporting granularity — one finding per distinct SQL sink (statement or mapper
+method). Do not merge two mappers/statements, and do not split one sink.
+
+Output anti-patterns:
+
+- BAD: one SQL sink reported as several findings, or two sinks merged.
+- BAD: free-form `vuln_type` or invented names.
+- BAD: self-numbered `rule_id`; use the vocabulary above.

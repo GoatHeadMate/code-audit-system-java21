@@ -117,3 +117,21 @@ A valid SSRF finding should cite:
 
 `rule_id` values: `ssrf-taint`, `ssrf-no-filter`, `ssrf-weak-contains`,
 `ssrf-redirect`, `ssrf-proxy`, `ssrf-metadata`.
+
+## Output Contract
+
+Use EXACTLY this `vuln_type` value (uppercase, underscores, no spaces): `SSRF`.
+Cross-API combinations use `ATTACK_CHAIN`.
+
+`rule_id` -> `vuln_type`: `ssrf-taint` / `ssrf-no-filter` / `ssrf-weak-contains`
+/ `ssrf-redirect` / `ssrf-proxy` / `ssrf-metadata` -> `SSRF`.
+
+Reporting granularity — one finding per distinct outbound sink. Multiple outbound
+clients in one endpoint that share the same unvalidated URL source may be one
+finding; distinct endpoints/sinks are separate findings.
+
+Output anti-patterns:
+
+- BAD: one sink reported as several findings.
+- BAD: free-form `vuln_type` or invented names.
+- BAD: self-numbered `rule_id`; use the vocabulary above.
