@@ -223,7 +223,7 @@ class SupervisorAgentTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void subagentLoadsSkillThroughAgentScopeToolInsteadOfInliningSkill()
+    void subagentEmbedsSkillRulesInsteadOfUsingUnavailableSkillLoadTool()
             throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
         when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
@@ -246,6 +246,18 @@ class SupervisorAgentTest {
         AuditJob job = new AuditJob("skill123", "java");
         job.workDir(tempDir.resolve("audit_skill123"));
         java.nio.file.Files.createDirectories(job.workDir());
+        Path skillDir = job.workDir().resolve(".claude/skills/audit-sql-injection");
+        Files.createDirectories(skillDir);
+        Files.writeString(skillDir.resolve("SKILL.md"), """
+                ---
+                name: audit-sql-injection
+                description: SQL rules
+                ---
+
+                # SQL 注入判断知识
+
+                Confirm only with source-level SQL construction evidence.
+                """);
 
         supervisor.run(
                 job,
@@ -266,13 +278,13 @@ class SupervisorAgentTest {
         assertThat(agent.tools()).containsExactly(
                 "read_file",
                 "glob_files",
-                "grep_files",
-                "load_skill_through_path"
+                "grep_files"
         );
         assertThat(agent.prompt())
-                .contains("load_skill_through_path(skillId=\"audit-sql-injection_audit\", path=\"SKILL.md\")")
+                .contains("Embedded judgment rules:")
+                .contains("# SQL 注入判断知识")
                 .contains("tasks/sql.json")
-                .doesNotContain("# SQL 注入判断知识")
+                .doesNotContain("load_skill_through_path")
                 .doesNotContain("specialistKnowledge");
     }
 

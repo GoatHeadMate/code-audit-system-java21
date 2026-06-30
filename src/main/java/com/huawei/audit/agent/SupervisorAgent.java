@@ -305,14 +305,13 @@ public class SupervisorAgent {
             List<String> candidates,
             Map<String, String> evidenceManifest,
             Map<String, String> skillManifest
-    ) {
+    ) throws IOException {
         Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
         List<String> readOnlyTools = List.of(
                 "read_file",
                 "glob_files",
-                "grep_files",
-                "load_skill_through_path"
+                "grep_files"
         );
         for (String hunter : candidates) {
             String taskPath = evidenceManifest.get(hunter);
@@ -328,14 +327,13 @@ public class SupervisorAgent {
                     ? List.of()
                     : List.of(skillId(skillName));
             String skillRef = skillName == null ? "(none)" : skillName;
-            String skillId = skillName == null ? "(none)" : skillId(skillName);
+            String skillRules = skillContent(workDirectory, skillName);
             String agentPrompt = SUBAGENT_PROMPT_TEMPLATE.formatted(
                     hunter,
                     skillRef,
-                    skillId,
                     taskPath,
                     sourceRootStr,
-                    skillId
+                    skillRules
             );
             agents.put(hunter, new ClaudeGateway.AgentDef(
                     "Audit " + hunter.replace('_', ' ')
@@ -347,6 +345,22 @@ public class SupervisorAgent {
             ));
         }
         return agents;
+    }
+
+    private String skillContent(Path workDirectory, String skillName) throws IOException {
+        if (skillName == null || skillName.isBlank()) {
+            return "No dedicated category skill file was generated for this hunter.";
+        }
+        Path skillFile = workDirectory
+                .resolve(".claude")
+                .resolve("skills")
+                .resolve(skillName)
+                .resolve("SKILL.md");
+        if (!Files.isRegularFile(skillFile)) {
+            return "Expected skill file was not found: "
+                    + skillFile.toAbsolutePath().normalize();
+        }
+        return Files.readString(skillFile);
     }
 
     private boolean hasReviewWork(Path taskPath) {
@@ -541,11 +555,9 @@ public class SupervisorAgent {
     private static final String SUBAGENT_PROMPT_TEMPLATE = """
             You are a white-box code audit subagent for the `%s` category.
 
-            Your category judgment rules are provided as an AgentScope skill named `%s`
-            (severity thresholds, confidence, sanitizer and downgrade conditions).
-            Your FIRST action must be:
-            load_skill_through_path(skillId="%s", path="SKILL.md")
-            Then follow the returned skill instructions before reviewing candidates.
+            Your category judgment rules are embedded below from `%s`.
+            Follow these severity thresholds, confidence rules, sanitizer rules
+            and downgrade conditions before reviewing candidates.
 
             Your task file (candidate paths to review):
             %s
@@ -553,26 +565,30 @@ public class SupervisorAgent {
             Source root:
             %s
 
+            Embedded judgment rules:
+            BEGIN_JUDGMENT_RULES
+            %s
+            END_JUDGMENT_RULES
+
             Execution steps:
-            1. Load your `%s` skill with load_skill_through_path before making judgments.
-            2. Read the task file to get all candidate-path, stored-candidate,
+            1. Read the task file to get all candidate-path, stored-candidate,
                and endpoint-review chunks.
                If `team_name` / `team_focus` are present, treat them as the
                dynamic business-risk team assignment and keep the review scoped
                to that focus.
-            3. Review EVERY candidate-path chunk, stored-candidate chunk, and
+            2. Review EVERY candidate-path chunk, stored-candidate chunk, and
                endpoint in `endpoint_review_chunks` / `endpoint_review_surface`.
                For authorization, also review every endpoint in `authorization_surface`.
-            4. For each endpoint-review item, read the referenced controller method
+            3. For each endpoint-review item, read the referenced controller method
                and decide whether it is vulnerable, safe/sec, or not applicable.
                Treat `business_intents`, `risk_hypotheses`, and
                `suggested_poc_checks` / `poc_plan` as the harness-generated audit plan.
                Validate or reject each hypothesis from source evidence; do not
                execute PoC payloads in this static-review stage.
-            5. For each candidate, validate the entrypoint-to-sink path against source code.
-            6. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
-            7. Never execute shell commands, create files, or delegate to another agent.
-            8. Return a single JSON object: {"chunks_reviewed": N, "endpoint_reviewed": N, "findings": [...]}.
+            4. For each candidate, validate the entrypoint-to-sink path against source code.
+            5. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
+            6. Never execute shell commands, create files, or delegate to another agent.
+            7. Return a single JSON object: {"chunks_reviewed": N, "endpoint_reviewed": N, "findings": [...]}.
                Each finding must contain: rule_id, verdict, title, severity, confidence,
                file_path, start_line, message, evidence, vuln_type, http_method,
                http_path, entrypoint, reachability, discovery_source, data_flow_path.
@@ -580,7 +596,7 @@ public class SupervisorAgent {
                `poc_plan` and keep `stage` as `STATIC_POC_PLAN_ONLY`.
                Use verdict values CONFIRM, DOWNGRADE, or NEEDS_REVIEW. Do not
                include SUPPRESS candidates in findings.
-            9. No markdown fences, no explanatory text around the JSON.
+            8. No markdown fences, no explanatory text around the JSON.
             """;
 
     private SupervisorEnvelope parseEnvelope(
