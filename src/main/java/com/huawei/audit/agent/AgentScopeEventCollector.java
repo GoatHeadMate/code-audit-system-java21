@@ -37,22 +37,32 @@ final class AgentScopeEventCollector {
             }
             case TOOL_CALL_START -> {
                 buffer(source).flush(eventConsumer);
-                if (event instanceof ToolCallStartEvent tool
-                        && isSupervisor(source)
-                        && "agent_spawn".equals(tool.getToolCallName())) {
-                    started.incrementAndGet();
-                    eventConsumer.accept("[subagent-start] START agent_spawn");
+                if (event instanceof ToolCallStartEvent tool) {
+                    if (isSupervisor(source)
+                            && "agent_spawn".equals(tool.getToolCallName())) {
+                        started.incrementAndGet();
+                        eventConsumer.accept("[subagent-start] START agent_spawn");
+                    } else {
+                        eventConsumer.accept(logPrefix(source)
+                                + " [tool-start] " + toolName(tool.getToolCallName()));
+                    }
                 }
             }
             case TOOL_RESULT_END -> {
                 buffer(source).flush(eventConsumer);
-                if (event instanceof ToolResultEndEvent tool
-                        && isSupervisor(source)
-                        && "agent_spawn".equals(tool.getToolCallName())) {
-                    int count = completed.incrementAndGet();
-                    eventConsumer.accept("[subagent-return] "
-                            + status(tool.getState())
-                            + " agent_spawn | completed " + count);
+                if (event instanceof ToolResultEndEvent tool) {
+                    if (isSupervisor(source)
+                            && "agent_spawn".equals(tool.getToolCallName())) {
+                        int count = completed.incrementAndGet();
+                        eventConsumer.accept("[subagent-return] "
+                                + status(tool.getState())
+                                + " agent_spawn | completed " + count);
+                    } else {
+                        eventConsumer.accept(logPrefix(source)
+                                + " [tool-end] "
+                                + status(tool.getState()) + " "
+                                + toolName(tool.getToolCallName()));
+                    }
                 }
             }
             case AGENT_RESULT -> {
@@ -126,6 +136,10 @@ final class AgentScopeEventCollector {
 
     private String status(ToolResultState state) {
         return state == ToolResultState.SUCCESS ? "DONE" : state.name();
+    }
+
+    private String toolName(String name) {
+        return name == null || name.isBlank() ? "(unknown-tool)" : name;
     }
 
     private String logPrefix(String source) {

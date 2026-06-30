@@ -82,6 +82,40 @@ class AgentScopeEventCollectorTest {
     }
 
     @Test
+    void logsSubagentToolStartAndEndEvents() {
+        List<String> logs = new ArrayList<>();
+        AgentScopeEventCollector collector = new AgentScopeEventCollector(
+                logs::add
+        );
+
+        collector.handle(new TextBlockDeltaEvent(
+                "r1",
+                "b1",
+                "I'll start by loading the audit skill."
+        ).withSource("audit-supervisor-123_sql_injection"));
+        collector.handle(new ToolCallStartEvent(
+                "r1",
+                "call-1",
+                "load_skill_through_path"
+        ).withSource("audit-supervisor-123_sql_injection"));
+        collector.handle(new ToolResultEndEvent(
+                "r1",
+                "call-1",
+                "load_skill_through_path",
+                ToolResultState.SUCCESS
+        ).withSource("audit-supervisor-123_sql_injection"));
+
+        assertThat(logs).containsExactly(
+                "[agentscope-audit-supervisor-123_sql_injection] "
+                        + "I'll start by loading the audit skill.",
+                "[agentscope-audit-supervisor-123_sql_injection] "
+                        + "[tool-start] load_skill_through_path",
+                "[agentscope-audit-supervisor-123_sql_injection] "
+                        + "[tool-end] DONE load_skill_through_path"
+        );
+    }
+
+    @Test
     void subagentMaxIterationsIsLoggedWithoutFailingSupervisor() {
         List<String> logs = new ArrayList<>();
         AgentScopeEventCollector collector = new AgentScopeEventCollector(
