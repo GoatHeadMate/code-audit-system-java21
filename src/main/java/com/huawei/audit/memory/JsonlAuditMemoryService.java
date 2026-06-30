@@ -22,6 +22,8 @@ import org.springframework.stereotype.Service;
 public class JsonlAuditMemoryService implements AuditMemoryService {
     private static final int SCHEMA_VERSION = 1;
     private static final int MAX_RECALL_PRIORS = 8;
+    private static final int MAX_RECALL_LINES = 5_000;
+    private static final int MIN_RECALL_SCORE = 2;
     private static final Map<String, Set<String>> HUNTER_TYPES = Map.of(
             "code_execution", Set.of(
                     "COMMAND_INJECTION", "SCRIPT_INJECTION",
@@ -138,7 +140,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             Set<String> endpointFiles = endpointValues(endpointSurface, "file_path");
             Map<String, PriorAccumulator> priors = new LinkedHashMap<>();
 
-            for (String line : Files.readAllLines(memoryFile)) {
+            for (String line : recentLines()) {
                 if (line.isBlank()) {
                     continue;
                 }
@@ -152,7 +154,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
                 }
                 int score = score(node, currentDependencies, endpointPaths,
                         endpointFiles, teamFocus);
-                if (score < 2) {
+                if (score < MIN_RECALL_SCORE) {
                     continue;
                 }
                 String key = String.join("|",
@@ -193,7 +195,7 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             Set<String> endpointFiles,
             String teamFocus
     ) {
-        int score = 2;
+        int score = 0;
         if (overlaps(dependencies, dependencyKeys(node.path("dependency_keys")))) {
             score += 2;
         }
@@ -211,6 +213,14 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
             score += 1;
         }
         return score;
+    }
+
+    private List<String> recentLines() throws Exception {
+        List<String> lines = Files.readAllLines(memoryFile);
+        if (lines.size() <= MAX_RECALL_LINES) {
+            return lines;
+        }
+        return lines.subList(lines.size() - MAX_RECALL_LINES, lines.size());
     }
 
     private List<String> dependencyKeys(Map<String, Object> techProfile) {
