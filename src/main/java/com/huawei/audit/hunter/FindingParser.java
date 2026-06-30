@@ -48,6 +48,12 @@ public class FindingParser {
             if (vulnType.isBlank()) {
                 vulnType = hunter;
             }
+            String normalizedType = FindingTypeNormalizer.normalize(
+                    vulnType,
+                    stringValue(finding, "rule_id"),
+                    stringValue(finding, "title", "message", "description"),
+                    hunter
+            );
             String verdict = normalizeVerdict(stringValue(
                     finding,
                     "verdict",
@@ -62,8 +68,11 @@ public class FindingParser {
                     "description",
                     "title"
             ));
-            finding.put("vuln_type", vulnType.toUpperCase(Locale.ROOT));
-            finding.put("vulnerability_type", vulnType.toUpperCase(Locale.ROOT));
+            if (!vulnType.isBlank() && !normalizedType.equalsIgnoreCase(vulnType)) {
+                finding.putIfAbsent("original_vuln_type", vulnType);
+            }
+            finding.put("vuln_type", normalizedType);
+            finding.put("vulnerability_type", normalizedType);
             finding.put("verdict", verdict);
             finding.put("status", verdict);
             finding.putIfAbsent("discovered_by", hunter);

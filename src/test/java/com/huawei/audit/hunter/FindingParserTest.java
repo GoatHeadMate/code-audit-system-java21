@@ -58,4 +58,54 @@ class FindingParserTest {
                 .containsEntry("verdict", "NEEDS_REVIEW")
                 .containsEntry("status", "NEEDS_REVIEW");
     }
+
+    @Test
+    void normalizesFreeFormVulnerabilityTypesBeforeAggregation() {
+        String response = """
+                [
+                  {
+                    "rule_id": "authz-csrf-disabled",
+                    "vuln_type": "BROKEN ACCESS CONTROL - CSRF PROTECTION DISABLED",
+                    "title": "CSRF protection is disabled"
+                  },
+                  {
+                    "rule_id": "authz-jwt-weak-secret",
+                    "vuln_type": "BROKEN ACCESS CONTROL - HARDCODED WEAK JWT SECRET ENABLES TOKEN FORGERY",
+                    "title": "Weak JWT secret"
+                  },
+                  {
+                    "rule_id": "auth-bypass-open-endpoint",
+                    "vuln_type": "AUTHENTICATION_BYPASS",
+                    "title": "Authentication bypass"
+                  },
+                  {
+                    "rule_id": "pathtrav-read",
+                    "vuln_type": "PATH_TRAVERSAL_OR_ARBITRARY_FILE_ACCESS",
+                    "title": "Arbitrary file read"
+                  },
+                  {
+                    "rule_id": "component-config",
+                    "vuln_type": "COMPONENT_OR_CONFIGURATION_VULNERABILITY",
+                    "title": "Exposed component"
+                  }
+                ]
+                """;
+
+        var findings = parser.parse(response, "authorization");
+
+        assertThat(findings)
+                .extracting(finding -> finding.get("vuln_type"))
+                .containsExactly(
+                        "CSRF",
+                        "JWT_WEAKNESS",
+                        "AUTH_BYPASS",
+                        "PATH_TRAVERSAL",
+                        "COMPONENT_VULN"
+                );
+        assertThat(findings.getFirst())
+                .containsEntry(
+                        "original_vuln_type",
+                        "BROKEN ACCESS CONTROL - CSRF PROTECTION DISABLED"
+                );
+    }
 }
