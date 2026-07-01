@@ -10,6 +10,7 @@ import com.huawei.audit.memory.AuditMemoryService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -22,6 +23,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -49,6 +52,11 @@ public class SupervisorAgent {
             "vulnerable_dependencies"
     );
     private static final int MAX_PARALLEL_HUNTER_SESSIONS = 2;
+    private static final int MAX_HUNTER_SESSIONS_PER_JOB = 24;
+    private static final Duration DEFAULT_HUNTER_SESSION_TIMEOUT =
+            Duration.ofMinutes(12);
+    private static final Duration DEFAULT_MODEL_SLOT_TIMEOUT =
+            Duration.ofMinutes(2);
 
     private final ClaudeGateway gateway;
     private final ObjectMapper objectMapper;
@@ -57,6 +65,8 @@ public class SupervisorAgent {
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
     private final AuditMemoryService auditMemory;
+    private final Duration hunterSessionTimeout;
+    private final Duration modelSlotTimeout;
 
     @org.springframework.beans.factory.annotation.Autowired
     public SupervisorAgent(
@@ -68,6 +78,22 @@ public class SupervisorAgent {
             JobLogBroker logs,
             AuditMemoryService auditMemory
     ) {
+        this(gateway, objectMapper, findingParser, findingConsolidator,
+                properties, logs, auditMemory,
+                DEFAULT_HUNTER_SESSION_TIMEOUT, DEFAULT_MODEL_SLOT_TIMEOUT);
+    }
+
+    SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            FindingConsolidator findingConsolidator,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory,
+            Duration hunterSessionTimeout,
+            Duration modelSlotTimeout
+    ) {
         this.gateway = gateway;
         this.objectMapper = objectMapper;
         this.findingParser = findingParser;
@@ -75,6 +101,10 @@ public class SupervisorAgent {
         this.properties = properties;
         this.logs = logs;
         this.auditMemory = auditMemory;
+        this.hunterSessionTimeout = positiveOrDefault(
+                hunterSessionTimeout, DEFAULT_HUNTER_SESSION_TIMEOUT);
+        this.modelSlotTimeout = positiveOrDefault(
+                modelSlotTimeout, DEFAULT_MODEL_SLOT_TIMEOUT);
     }
 
     public SupervisorAgent(
@@ -172,12 +202,13 @@ public class SupervisorAgent {
         List<String> rationaleParts = new ArrayList<>();
         List<Map<String, Object>> findings = new ArrayList<>();
         List<String> failures = new ArrayList<>();
-        List<Future<HunterSessionResult>> futures = new ArrayList<>();
+        List<SessionFuture> futures = new ArrayList<>();
         Semaphore sessionSlots = new Semaphore(MAX_PARALLEL_HUNTER_SESSIONS);
 
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+        try {
             for (Map.Entry<String, ClaudeGateway.AgentDef> entry : agents.entrySet()) {
-                futures.add(executor.submit(() -> superviseHunter(
+                futures.add(new SessionFuture(entry.getKey(), executor.submit(() -> superviseHunter(
                         job,
                         sourceRoot,
                         techProfile,
@@ -185,10 +216,10 @@ public class SupervisorAgent {
                         entry.getKey(),
                         entry.getValue(),
                         sessionSlots
-                )));
+                ))));
             }
 
-            for (Future<HunterSessionResult> future : futures) {
+            for (SessionFuture future : futures) {
                 HunterSessionResult result = await(future);
                 if (result.failure() != null) {
                     failures.add(result.hunter() + ": " + result.failure());
@@ -203,6 +234,8 @@ public class SupervisorAgent {
                 rationaleParts.add(result.hunter() + ": " + envelope.rationale());
                 findings.addAll(envelope.findings());
             }
+        } finally {
+            executor.shutdownNow();
         }
 
         if (selectedHunters.isEmpty() && !failures.isEmpty()) {
@@ -244,7 +277,14 @@ public class SupervisorAgent {
         long startedAt = createdAt;
         String startedAtText = Instant.now().toString();
         try {
-            sessionSlots.acquire();
+            if (!sessionSlots.tryAcquire(
+                    modelSlotTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                String failure = "timed out waiting for model slot after "
+                        + modelSlotTimeout;
+                rememberAgentRun(job, hunter, agentDef, "TIMEOUT", startedAtText,
+                        createdAt, startedAt, 0, failure);
+                return new HunterSessionResult(hunter, null, failure);
+            }
             slotAcquired = true;
             startedAt = System.nanoTime();
             startedAtText = Instant.now().toString();
@@ -337,14 +377,22 @@ public class SupervisorAgent {
         auditMemory.rememberAgentRun(job, event);
     }
 
-    private HunterSessionResult await(Future<HunterSessionResult> future) {
+    private HunterSessionResult await(SessionFuture sessionFuture) {
         try {
-            return future.get();
+            return sessionFuture.future()
+                    .get(hunterSessionTimeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(
                     "interrupted while waiting for AgentScope hunter session",
                     interrupted
+            );
+        } catch (TimeoutException timeout) {
+            sessionFuture.future().cancel(true);
+            return new HunterSessionResult(
+                    sessionFuture.hunter(),
+                    null,
+                    "timed out after " + hunterSessionTimeout
             );
         } catch (ExecutionException executionException) {
             throw new IllegalStateException(
@@ -430,12 +478,14 @@ public class SupervisorAgent {
                     String.valueOf(decision.getOrDefault("rationale", ""))
             )));
         }
-        builds.stream()
+        List<AgentBuild> selectedBuilds = builds.stream()
                 .sorted(Comparator
                         .comparingInt((AgentBuild build) -> build.agentDef().priority())
                         .reversed()
                         .thenComparing(AgentBuild::hunter))
-                .forEach(build -> agents.put(build.hunter(), build.agentDef()));
+                .limit(MAX_HUNTER_SESSIONS_PER_JOB)
+                .toList();
+        selectedBuilds.forEach(build -> agents.put(build.hunter(), build.agentDef()));
         return agents;
     }
 
@@ -898,6 +948,18 @@ public class SupervisorAgent {
             String hunter,
             ClaudeGateway.AgentDef agentDef
     ) { }
+
+    private record SessionFuture(
+            String hunter,
+            Future<HunterSessionResult> future
+    ) { }
+
+    private Duration positiveOrDefault(Duration value, Duration fallback) {
+        if (value == null || value.isZero() || value.isNegative()) {
+            return fallback;
+        }
+        return value;
+    }
 
     public record SupervisorResult(
             List<String> selectedHunters,

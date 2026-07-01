@@ -17,7 +17,9 @@ import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.memory.AuditMemoryService;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -750,6 +752,95 @@ class SupervisorAgentTest {
             assertThat((List<?>) finding.get("merged_from")).hasSize(2);
         });
         assertThat(result.rationale()).contains("finding consolidation");
+    }
+
+    @Test
+    void capsHunterSessionsToHighestPriorityTasks() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> invoked = new ArrayList<>();
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    calls.incrementAndGet();
+                    Map<String, ClaudeGateway.AgentDef> agents =
+                            invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    invoked.add(hunter);
+                    return """
+                            {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                            """.formatted(hunter);
+                });
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new FindingConsolidator(),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                Duration.ofSeconds(5),
+                Duration.ofSeconds(1)
+        );
+        AuditJob job = new AuditJob("cap123", "java");
+        job.workDir(tempDir.resolve("audit_cap123"));
+        Files.createDirectories(job.workDir());
+        List<String> candidates = new ArrayList<>();
+        Map<String, String> manifest = new LinkedHashMap<>();
+        for (int i = 0; i < 30; i++) {
+            String hunter = "ssrf_batch_" + i;
+            candidates.add(hunter);
+            manifest.put(hunter, taskFileWithDecision(hunter, 16, 100 - i)
+                    .toString());
+        }
+
+        supervisor.run(job, Path.of("source"), Map.of(), candidates,
+                manifest, Map.of(), Map.of());
+
+        assertThat(calls).hasValue(24);
+        assertThat(invoked)
+                .contains("ssrf_batch_0", "ssrf_batch_23")
+                .doesNotContain("ssrf_batch_24", "ssrf_batch_29");
+    }
+
+    @Test
+    void timesOutHungHunterSession() throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Thread.sleep(TimeUnit.SECONDS.toMillis(5));
+                    return """
+                            {"selected_hunters":["ssrf"],"rationale":"late","findings":[]}
+                            """;
+                });
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new FindingConsolidator(),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                Duration.ofMillis(100),
+                Duration.ofMillis(50)
+        );
+        AuditJob job = new AuditJob("timeout123", "java");
+        job.workDir(tempDir.resolve("audit_timeout123"));
+        Files.createDirectories(job.workDir());
+
+        assertThatThrownBy(() -> supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("ssrf"),
+                Map.of("ssrf", taskFile("ssrf", 1).toString()),
+                Map.of(),
+                Map.of()
+        ))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("all AgentScope hunter sessions failed")
+                .hasMessageContaining("timed out after");
     }
 
     private Path taskFile(String hunter, int candidateCount) throws Exception {
