@@ -21,6 +21,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -33,9 +34,21 @@ public class AgentScopeGateway implements ClaudeGateway {
     private static final long RETRY_BASE_DELAY_MS = 30_000L;
 
     private final AgentScopeProperties properties;
+    private final CodeGraphMcpTooling codeGraphMcpTooling;
 
     public AgentScopeGateway(AgentScopeProperties properties) {
+        this(properties, CodeGraphMcpTooling.disabled());
+    }
+
+    @Autowired
+    public AgentScopeGateway(
+            AgentScopeProperties properties,
+            CodeGraphMcpTooling codeGraphMcpTooling
+    ) {
         this.properties = properties;
+        this.codeGraphMcpTooling = codeGraphMcpTooling == null
+                ? CodeGraphMcpTooling.disabled()
+                : codeGraphMcpTooling;
     }
 
     @Override
@@ -98,7 +111,10 @@ public class AgentScopeGateway implements ClaudeGateway {
                 eventConsumer
         );
 
-        try (HarnessAgent agent = baseBuilder(workingDirectory, sourceRoot, declarations)
+        HarnessAgent.Builder builder = baseBuilder(workingDirectory, sourceRoot, declarations);
+        codeGraphMcpTooling.toolsConfig(sourceRoot, eventConsumer)
+                .ifPresent(builder::toolsConfig);
+        try (HarnessAgent agent = builder
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
                 .sysPrompt("You are a white-box security audit supervisor. Follow the user prompt exactly.")

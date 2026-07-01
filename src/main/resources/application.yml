@@ -38,3 +38,11 @@ audit:
     max-parallel-hunter-sessions: ${MAX_PARALLEL_HUNTER_SESSIONS:2}
     hunter-session-timeout: ${HUNTER_SESSION_TIMEOUT:12m}
     model-slot-timeout: ${MODEL_SLOT_TIMEOUT:2m}
+  codegraph:
+    enabled: ${CODEGRAPH_MCP_ENABLED:false}
+    command: ${CODEGRAPH_COMMAND:codegraph}
+    auto-index: ${CODEGRAPH_AUTO_INDEX:true}
+    tools: ${CODEGRAPH_MCP_TOOLS:codegraph_explore}
+    init-timeout: ${CODEGRAPH_INIT_TIMEOUT:2m}
+    timeout: ${CODEGRAPH_TOOL_TIMEOUT:2m}
+    initialization-timeout: ${CODEGRAPH_MCP_INIT_TIMEOUT:30s}

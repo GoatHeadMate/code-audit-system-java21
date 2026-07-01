@@ -3,6 +3,8 @@ package com.huawei.audit.agent;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.huawei.audit.config.AgentScopeProperties;
+import com.huawei.audit.config.CodeGraphProperties;
+import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
@@ -40,5 +42,33 @@ class AgentScopeGatewayTest {
         Field tracing = builder.getClass().getDeclaredField("agentTracingLogEnabled");
         tracing.setAccessible(true);
         assertThat(tracing.getBoolean(builder)).isFalse();
+    }
+
+    @Test
+    void buildsCodeGraphStdioMcpToolsConfig() {
+        CodeGraphMcpTooling tooling = new CodeGraphMcpTooling(new CodeGraphProperties(
+                true,
+                "codegraph",
+                List.of("codegraph_explore"),
+                false,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(4)
+        ));
+
+        ToolsConfig config = tooling.toolsConfig(tempDir, ignored -> {
+        }).orElseThrow();
+
+        var server = config.getMcpServers().get("codegraph");
+        assertThat(server.getTransport()).isEqualTo("stdio");
+        assertThat(server.getCommand()).isEqualTo("codegraph");
+        assertThat(server.getArgs()).containsExactly(
+                "serve",
+                "--mcp",
+                "--path",
+                tempDir.toAbsolutePath().normalize().toString()
+        );
+        assertThat(server.getEnableTools()).containsExactly("codegraph_explore");
+        assertThat(server.getEnv()).containsEntry("CODEGRAPH_MCP_TOOLS", "explore");
     }
 }

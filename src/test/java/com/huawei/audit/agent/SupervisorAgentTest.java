@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.audit.config.CodeGraphProperties;
 import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
@@ -323,6 +324,57 @@ class SupervisorAgentTest {
                 .doesNotContain("Embedded judgment rules:")
                 .doesNotContain("# SQL 注入判断知识")
                 .doesNotContain("specialistKnowledge");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void addsCodeGraphExploreToolWhenMcpIsEnabled() throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any())).thenReturn("""
+                {"selected_hunters":["ssrf"],"rationale":"ok","findings":[]}
+                """);
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                new CodeGraphProperties(
+                        true,
+                        "codegraph",
+                        List.of("codegraph_explore"),
+                        false,
+                        Duration.ofSeconds(2),
+                        Duration.ofSeconds(3),
+                        Duration.ofSeconds(4)
+                )
+        );
+        AuditJob job = new AuditJob("codegraph-tools123", "java");
+        job.workDir(tempDir.resolve("audit_codegraph_tools123"));
+        Files.createDirectories(job.workDir());
+        Path task = taskFile("ssrf", 1);
+
+        supervisor.runRound(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("ssrf"),
+                Map.of("ssrf", task.toString()),
+                Map.of(),
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
+        );
+
+        ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
+                ArgumentCaptor.forClass(Map.class);
+        verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
+        assertThat(agentsCaptor.getValue().get("ssrf").tools())
+                .contains("codegraph_explore");
     }
 
     @Test

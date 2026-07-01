@@ -2,6 +2,7 @@ package com.huawei.audit.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.audit.config.CodeGraphProperties;
 import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
@@ -63,8 +64,23 @@ public class SupervisorAgent {
     private final Duration modelSlotTimeout;
     private final int maxParallelHunterSessions;
     private final int maxHunterSessionsPerRound;
+    private final CodeGraphProperties codeGraphProperties;
 
     @org.springframework.beans.factory.annotation.Autowired
+    public SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory,
+            CodeGraphProperties codeGraphProperties
+    ) {
+        this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
+                properties.hunterSessionTimeout(), properties.modelSlotTimeout(),
+                codeGraphProperties);
+    }
+
     public SupervisorAgent(
             ClaudeGateway gateway,
             ObjectMapper objectMapper,
@@ -74,7 +90,8 @@ public class SupervisorAgent {
             AuditMemoryService auditMemory
     ) {
         this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
-                properties.hunterSessionTimeout(), properties.modelSlotTimeout());
+                properties.hunterSessionTimeout(), properties.modelSlotTimeout(),
+                CodeGraphProperties.disabled());
     }
 
     SupervisorAgent(
@@ -86,6 +103,21 @@ public class SupervisorAgent {
             AuditMemoryService auditMemory,
             Duration hunterSessionTimeout,
             Duration modelSlotTimeout
+    ) {
+        this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
+                hunterSessionTimeout, modelSlotTimeout, CodeGraphProperties.disabled());
+    }
+
+    SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory,
+            Duration hunterSessionTimeout,
+            Duration modelSlotTimeout,
+            CodeGraphProperties codeGraphProperties
     ) {
         this.gateway = gateway;
         this.objectMapper = objectMapper;
@@ -99,6 +131,9 @@ public class SupervisorAgent {
                 modelSlotTimeout, properties.modelSlotTimeout());
         this.maxParallelHunterSessions = properties.maxParallelHunterSessions();
         this.maxHunterSessionsPerRound = properties.maxHunterSessionsPerRound();
+        this.codeGraphProperties = codeGraphProperties == null
+                ? CodeGraphProperties.disabled()
+                : codeGraphProperties;
     }
 
     public SupervisorAgent(
@@ -438,12 +473,15 @@ public class SupervisorAgent {
             Set<String> alreadyAttempted
     ) throws IOException {
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
-        List<String> readOnlyTools = List.of(
+        List<String> readOnlyTools = new ArrayList<>(List.of(
                 "read_file",
                 "glob_files",
                 "grep_files",
                 "load_skill_through_path"
-        );
+        ));
+        if (codeGraphProperties.enabled()) {
+            readOnlyTools.addAll(codeGraphProperties.tools());
+        }
         List<AgentBuild> builds = new ArrayList<>();
         for (String hunter : candidates) {
             if (alreadyAttempted.contains(hunter)) {
