@@ -1,6 +1,8 @@
 package com.huawei.audit.api;
 
 import com.huawei.audit.api.ApiDtos.FindingsResponse;
+import com.huawei.audit.api.ApiDtos.AutoFindingFeedbackItem;
+import com.huawei.audit.api.ApiDtos.AutoFindingFeedbackResponse;
 import com.huawei.audit.api.ApiDtos.FindingFeedbackRequest;
 import com.huawei.audit.api.ApiDtos.FindingFeedbackResponse;
 import com.huawei.audit.api.ApiDtos.RuleCandidatesResponse;
@@ -26,8 +28,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
@@ -54,6 +59,7 @@ public class AuditController {
     private final ClaudeGateway claudeGateway;
     private final OrchestratorProperties orchestratorProperties;
     private final AuditMemoryService auditMemory;
+    private final FindingAutoEvaluator findingAutoEvaluator;
 
     public AuditController(
             AuditJobStore jobs,
@@ -73,6 +79,7 @@ public class AuditController {
         this.claudeGateway = claudeGateway;
         this.orchestratorProperties = orchestratorProperties;
         this.auditMemory = auditMemory;
+        this.findingAutoEvaluator = new FindingAutoEvaluator();
     }
 
     @PostMapping(
@@ -275,6 +282,69 @@ public class AuditController {
         );
     }
 
+    @PostMapping("/audit/{jobId}/findings/auto-feedback")
+    public AutoFindingFeedbackResponse autoFindingFeedback(
+            @PathVariable String jobId
+    ) {
+        AuditJob job = requireJob(jobId);
+        if (job.status() != JobStatus.DONE && job.status() != JobStatus.FAILED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "audit findings are not final"
+            );
+        }
+        List<FindingAutoEvaluator.Evaluation> evaluations =
+                findingAutoEvaluator.evaluate(job.findings());
+        Set<Integer> recordedIndexes = new HashSet<>();
+        for (FindingAutoEvaluator.Evaluation evaluation : evaluations) {
+            Map<String, Object> finding = job.findings().get(evaluation.findingIndex());
+            if (FindingAutoEvaluator.REVIEWER.equals(
+                    String.valueOf(finding.getOrDefault("feedback_reviewer", ""))
+            )) {
+                continue;
+            }
+            auditMemory.rememberFeedback(
+                    job,
+                    evaluation.findingIndex(),
+                    finding,
+                    evaluation.verdict(),
+                    evaluation.rationale(),
+                    FindingAutoEvaluator.REVIEWER,
+                    evaluation.pocStatus(),
+                    evaluation.learningNote(),
+                    evaluation.targetSeverity()
+            );
+            recordedIndexes.add(evaluation.findingIndex());
+        }
+        applyAutoFeedback(job, evaluations);
+        Map<String, Integer> verdictCounts = evaluations.stream().collect(
+                Collectors.toMap(
+                        FindingAutoEvaluator.Evaluation::verdict,
+                        ignored -> 1,
+                        Integer::sum,
+                        LinkedHashMap::new
+                )
+        );
+        List<AutoFindingFeedbackItem> items = evaluations.stream()
+                .map(evaluation -> new AutoFindingFeedbackItem(
+                        evaluation.findingIndex(),
+                        evaluation.verdict(),
+                        evaluation.rationale(),
+                        evaluation.pocStatus(),
+                        evaluation.targetSeverity(),
+                        evaluation.learningNote(),
+                        recordedIndexes.contains(evaluation.findingIndex())
+                ))
+                .toList();
+        return new AutoFindingFeedbackResponse(
+                job.jobId(),
+                evaluations.size(),
+                verdictCounts,
+                items,
+                "auto feedback recorded as audit memory priors"
+        );
+    }
+
     @GetMapping("/audit/rule-candidates")
     public RuleCandidatesResponse ruleCandidates() {
         return new RuleCandidatesResponse(auditMemory.listRuleCandidates());
@@ -360,6 +430,38 @@ public class AuditController {
             case "POC_FAILURE", "POC_FAILED", "EXPLOIT_FAILED" -> "POC_FAILURE";
             default -> "";
         };
+    }
+
+    private void applyAutoFeedback(
+            AuditJob job,
+            List<FindingAutoEvaluator.Evaluation> evaluations
+    ) {
+        Map<Integer, FindingAutoEvaluator.Evaluation> byIndex =
+                evaluations.stream().collect(Collectors.toMap(
+                        FindingAutoEvaluator.Evaluation::findingIndex,
+                        evaluation -> evaluation
+                ));
+        List<Map<String, Object>> updated = job.findings().stream()
+                .<Map<String, Object>>map(finding -> new LinkedHashMap<>(finding))
+                .toList();
+        for (int index = 0; index < updated.size(); index++) {
+            FindingAutoEvaluator.Evaluation evaluation = byIndex.get(index);
+            if (evaluation == null) {
+                continue;
+            }
+            Map<String, Object> finding = updated.get(index);
+            finding.put("feedback_verdict", evaluation.verdict());
+            finding.put("feedback_reviewer", FindingAutoEvaluator.REVIEWER);
+            finding.put("feedback_rationale", evaluation.rationale());
+            finding.put("feedback_auto", true);
+            if (!evaluation.pocStatus().isBlank()) {
+                finding.put("feedback_poc_status", evaluation.pocStatus());
+            }
+            if (!evaluation.targetSeverity().isBlank()) {
+                finding.put("feedback_target_severity", evaluation.targetSeverity());
+            }
+        }
+        job.findings(updated);
     }
 
     private String normalizeRuleDecision(String decision) {

@@ -60,6 +60,24 @@ public final class ApiDtos {
             String message
     ) { }
 
+    public record AutoFindingFeedbackResponse(
+            String jobId,
+            int evaluatedCount,
+            Map<String, Integer> verdictCounts,
+            List<AutoFindingFeedbackItem> evaluations,
+            String message
+    ) { }
+
+    public record AutoFindingFeedbackItem(
+            int findingIndex,
+            String verdict,
+            String rationale,
+            String pocStatus,
+            String targetSeverity,
+            String learningNote,
+            boolean recorded
+    ) { }
+
     public record RuleCandidatesResponse(
             List<Map<String, Object>> candidates
     ) { }

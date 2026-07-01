@@ -3,6 +3,7 @@ package com.huawei.audit.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -172,6 +173,67 @@ class AuditControllerTest {
                 "failed",
                 "same sanitizer should be checked first",
                 "LOW"
+        );
+    }
+
+    @Test
+    void recordsAutomaticFindingFeedbackForAllFindings() {
+        AuditJobStore jobs = mock(AuditJobStore.class);
+        SourceWorkspaceService sources = mock(SourceWorkspaceService.class);
+        InterfaceInventoryService inventory = mock(
+                InterfaceInventoryService.class
+        );
+        AuditOrchestrator orchestrator = mock(AuditOrchestrator.class);
+        AuditMemoryService memory = mock(AuditMemoryService.class);
+        AuditJob job = new AuditJob("auto-feedback1", "java");
+        job.findings(List.of(
+                Map.of(
+                        "rule_id", "rce-1",
+                        "vuln_type", "COMMAND_INJECTION",
+                        "severity", "CRITICAL",
+                        "confidence", "HIGH",
+                        "message", "request parameter reaches exec"
+                ),
+                Map.of(
+                        "rule_id", "weak-1",
+                        "vuln_type", "SSRF",
+                        "severity", "HIGH",
+                        "confidence", "LOW"
+                )
+        ));
+        job.setStatus(com.huawei.audit.domain.JobStatus.DONE);
+
+        when(jobs.find(job.jobId())).thenReturn(Optional.of(job));
+
+        AuditController controller = controller(
+                jobs,
+                sources,
+                inventory,
+                orchestrator,
+                memory
+        );
+
+        var response = controller.autoFindingFeedback(job.jobId());
+
+        assertThat(response.evaluatedCount()).isEqualTo(2);
+        assertThat(response.verdictCounts())
+                .containsEntry("CONFIRM", 1)
+                .containsEntry("NEEDS_REVIEW", 1);
+        assertThat(job.findings().getFirst())
+                .containsEntry("feedback_verdict", "CONFIRM")
+                .containsEntry("feedback_reviewer", "auto-evaluator");
+        assertThat(job.findings().get(1))
+                .containsEntry("feedback_verdict", "NEEDS_REVIEW");
+        verify(memory, times(2)).rememberFeedback(
+                org.mockito.Mockito.eq(job),
+                org.mockito.Mockito.anyInt(),
+                org.mockito.Mockito.anyMap(),
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.eq("auto-evaluator"),
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.anyString(),
+                org.mockito.Mockito.anyString()
         );
     }
 

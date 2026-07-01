@@ -357,6 +357,8 @@ let jobs     = {};
 let previewJobId = null;
 let interfaces = [];
 let selectedInterfaces = new Set();
+let currentFindings = [];
+let autoFeedbackDoneJobs = new Set();
 
 // ── Boot ───────────────────────────────────────────────────────────
 ping();
@@ -815,19 +817,57 @@ async function sendFeedback(idx, verdict, btn, extra={}) {
       body: JSON.stringify({ verdict, reviewer: 'ui', ...extra })
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const label = {
-      CONFIRM:'已确认漏洞',
-      FALSE_POSITIVE:'已标记误报',
-      NEEDS_REVIEW:'已标记待复核',
-      DUPLICATE:'已标记重复',
-      RISK_DOWNGRADE:'已标记风险降级',
-      MISSED_FINDING:'已记录漏报补充',
-      POC_SUCCESS:'已记录 PoC 成功',
-      POC_FAILURE:'已记录 PoC 失败'
-    }[verdict] || verdict;
-    if (wrap) wrap.innerHTML = `<span class="text-xs text-emerald-600 font-medium">${label}（已记入审计记忆）</span>`;
+    if (currentFindings[idx]) {
+      currentFindings[idx].feedback_verdict = verdict;
+      currentFindings[idx].feedback_reviewer = 'ui';
+      currentFindings[idx].feedback_auto = false;
+    }
+    if (wrap) setFeedbackStatus(wrap, idx, verdict, false, '已记入审计记忆');
   } catch (e) {
     if (wrap) wrap.insertAdjacentHTML('beforeend', `<span class="text-xs text-red-500 ml-1">提交失败，请重试</span>`);
+  }
+}
+
+async function autoEvaluateFindings(btn=null, silent=false) {
+  if (!selId || !currentFindings.length) return;
+  const jobId = selId;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '自动评价中...';
+  }
+  const status = document.getElementById('autoFeedbackStatus');
+  if (status && !silent) status.textContent = '正在根据置信度、PoC、证据完整性自动评价...';
+  try {
+    const r = await fetch(`/audit/${jobId}/findings/auto-feedback`, { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    if (selId !== jobId) return;
+    (data.evaluations || []).forEach(item => {
+      const idx = item.findingIndex;
+      if (currentFindings[idx]) {
+        currentFindings[idx].feedback_verdict = item.verdict;
+        currentFindings[idx].feedback_reviewer = 'auto-evaluator';
+        currentFindings[idx].feedback_rationale = item.rationale;
+        currentFindings[idx].feedback_auto = true;
+      }
+      const wrap = document.querySelector(`.feedback-actions[data-finding-idx="${idx}"]`);
+      if (wrap) setFeedbackStatus(wrap, idx, item.verdict, true, item.recorded ? '已写入审计记忆' : '已评价');
+    });
+    autoFeedbackDoneJobs.add(jobId);
+    const summary = Object.entries(data.verdictCounts || {})
+      .map(([k,v]) => `${feedbackLabel(k)} ${v}`)
+      .join(' · ');
+    if (status) status.textContent = `自动评价完成：${summary || data.evaluatedCount + ' 条'}`;
+    if (btn) {
+      btn.textContent = '已自动评价';
+      btn.classList.add('opacity-70');
+    }
+  } catch (e) {
+    if (status) status.textContent = '自动评价失败，请稍后重试';
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '自动评价全部';
+    }
   }
 }
 
@@ -843,6 +883,7 @@ async function loadFindings(id) {
 
 function renderFindings({ findings=[] }) {
   const el = document.getElementById('findingsBody');
+  currentFindings = findings;
   if (!findings.length) {
     el.innerHTML = `<div class="py-16 text-center">
       <div class="text-4xl mb-3">🎉</div>
@@ -850,11 +891,22 @@ function renderFindings({ findings=[] }) {
     </div>`;
     return;
   }
+  const hasAutoFeedback = findings.some(f => f.feedback_reviewer === 'auto-evaluator');
   el.innerHTML = `
-    <div class="mb-4 text-sm text-slate-500">
-      共 <strong class="text-slate-800">${findings.length}</strong> 个漏洞
+    <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <div class="text-sm text-slate-500">
+        共 <strong class="text-slate-800">${findings.length}</strong> 个漏洞
+        <span id="autoFeedbackStatus" class="ml-2 text-xs text-slate-400">${hasAutoFeedback ? '已自动评价，可人工改判' : '可自动批量评价'}</span>
+      </div>
+      <button id="autoFeedbackBtn" onclick="autoEvaluateFindings(this)"
+        class="self-start rounded border border-blue-200 px-3 py-1.5 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">
+        ${hasAutoFeedback ? '重新评价全部' : '自动评价全部'}
+      </button>
     </div>
     <div class="space-y-3">${findings.map((f, i) => mkFinding(f, i)).join('')}</div>`;
+  if (!hasAutoFeedback && !autoFeedbackDoneJobs.has(selId)) {
+    window.setTimeout(() => autoEvaluateFindings(null, true), 200);
+  }
 }
 
 function mkFinding(f, idx) {
@@ -965,18 +1017,61 @@ function mkFinding(f, idx) {
       </div>
 
       <!-- Feedback actions -->
-      <div class="feedback-actions flex items-center flex-wrap gap-2 mt-3 pt-2 border-t border-slate-100">
-        <span class="text-xs text-slate-400">这条结果：</span>
-        <button onclick="sendFeedback(${idx},'CONFIRM',this)" class="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">确认漏洞</button>
-        <button onclick="sendFeedback(${idx},'FALSE_POSITIVE',this)" class="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors">误报</button>
-        <button onclick="sendFeedback(${idx},'NEEDS_REVIEW',this)" class="text-xs px-2 py-1 rounded border border-amber-200 text-amber-600 hover:bg-amber-50 transition-colors">待复核</button>
-        <button onclick="sendFeedback(${idx},'POC_SUCCESS',this,{pocStatus:'SUCCESS'})" class="text-xs px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50 transition-colors">PoC 成功</button>
-        <button onclick="sendFeedback(${idx},'POC_FAILURE',this,{pocStatus:'FAILURE'})" class="text-xs px-2 py-1 rounded border border-orange-200 text-orange-600 hover:bg-orange-50 transition-colors">PoC 失败</button>
-        <button onclick="sendFeedback(${idx},'DUPLICATE',this)" class="text-xs px-2 py-1 rounded border border-slate-200 text-slate-500 hover:bg-slate-50 transition-colors">重复</button>
-        <button onclick="sendFeedback(${idx},'RISK_DOWNGRADE',this,{targetSeverity:'LOW'})" class="text-xs px-2 py-1 rounded border border-blue-200 text-blue-600 hover:bg-blue-50 transition-colors">风险降级</button>
-        <button onclick="sendFeedback(${idx},'MISSED_FINDING',this)" class="text-xs px-2 py-1 rounded border border-purple-200 text-purple-600 hover:bg-purple-50 transition-colors">漏报补充</button>
-      </div>
+      ${renderFeedbackActions(f, idx)}
     </div>`;
+}
+
+function renderFeedbackActions(f, idx) {
+  const verdict = (f.feedback_verdict || '').toString().toUpperCase();
+  const isAuto = f.feedback_reviewer === 'auto-evaluator' || f.feedback_auto === true;
+  const intro = verdict
+    ? `<span class="text-xs ${isAuto ? 'text-blue-600' : 'text-emerald-600'} font-medium">当前：${isAuto ? '自动评价为' : ''}${feedbackLabel(verdict)}</span>`
+    : '<span class="text-xs text-slate-400">这条结果：</span>';
+  return `
+    <div class="feedback-actions flex items-center flex-wrap gap-2 mt-3 pt-2 border-t border-slate-100" data-finding-idx="${idx}">
+      ${intro}
+      ${feedbackButtons(idx, verdict)}
+    </div>`;
+}
+
+function setFeedbackStatus(wrap, idx, verdict, isAuto, suffix) {
+  wrap.innerHTML = `
+    <span class="text-xs ${isAuto ? 'text-blue-600' : 'text-emerald-600'} font-medium">
+      ${isAuto ? '自动评价：' : ''}${feedbackLabel(verdict)}（${suffix}）
+    </span>
+    ${feedbackButtons(idx, verdict)}`;
+}
+
+function feedbackLabel(verdict) {
+  return {
+    CONFIRM:'确认漏洞',
+    FALSE_POSITIVE:'误报',
+    NEEDS_REVIEW:'待复核',
+    DUPLICATE:'重复',
+    RISK_DOWNGRADE:'风险降级',
+    MISSED_FINDING:'漏报补充',
+    POC_SUCCESS:'PoC 成功',
+    POC_FAILURE:'PoC 失败'
+  }[(verdict || '').toString().toUpperCase()] || verdict;
+}
+
+function feedbackButtons(idx, current='') {
+  const actions = [
+    ['CONFIRM', '确认漏洞', '', 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'],
+    ['FALSE_POSITIVE', '误报', '', 'border-red-200 text-red-600 hover:bg-red-50'],
+    ['NEEDS_REVIEW', '待复核', '', 'border-amber-200 text-amber-600 hover:bg-amber-50'],
+    ['POC_SUCCESS', 'PoC 成功', ",{pocStatus:'SUCCESS'}", 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'],
+    ['POC_FAILURE', 'PoC 失败', ",{pocStatus:'FAILURE'}", 'border-orange-200 text-orange-600 hover:bg-orange-50'],
+    ['DUPLICATE', '重复', '', 'border-slate-200 text-slate-500 hover:bg-slate-50'],
+    ['RISK_DOWNGRADE', '风险降级', ",{targetSeverity:'LOW'}", 'border-blue-200 text-blue-600 hover:bg-blue-50'],
+    ['MISSED_FINDING', '漏报补充', '', 'border-purple-200 text-purple-600 hover:bg-purple-50']
+  ];
+  const normalized = (current || '').toString().toUpperCase();
+  return actions
+    .filter(([verdict]) => verdict !== normalized)
+    .map(([verdict, label, extra, cls]) =>
+      `<button onclick="sendFeedback(${idx},'${verdict}',this${extra})" class="text-xs px-2 py-1 rounded border ${cls} transition-colors">${normalized ? '改为' : ''}${label}</button>`
+    ).join('');
 }
 
 function renderEvidence(ev) {
