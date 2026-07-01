@@ -4,6 +4,7 @@ public enum JobStatus {
     PENDING("pending"),
     CLONING("cloning"),
     RUNNING("running"),
+    PARTIAL("partial"),
     DONE("done"),
     FAILED("failed");
 

@@ -3,6 +3,7 @@ package com.huawei.audit.domain;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayDeque;
@@ -31,6 +32,13 @@ public final class AuditJob {
     private volatile String cacheKey = "";
     private volatile boolean submitted;
     private volatile boolean logDone;
+    private volatile int roundsCompleted = 0;
+    private volatile boolean continuationComplete = true;
+    private volatile boolean ceilingHit = false;
+    private volatile Set<String> reviewedHunters = Set.of();
+    private volatile Set<String> timedOutHunters = Set.of();
+    private volatile Set<String> failedHunters = Set.of();
+    private volatile int totalCandidateCount = 0;
 
     public AuditJob(String jobId, String lang) {
         this(jobId, lang, Instant.now());
@@ -87,6 +95,13 @@ public final class AuditJob {
     }
     public boolean logDone() { return logDone; }
     public int findingsCount() { return findings.size(); }
+    public int roundsCompleted() { return roundsCompleted; }
+    public boolean continuationComplete() { return continuationComplete; }
+    public boolean ceilingHit() { return ceilingHit; }
+    public Set<String> reviewedHunters() { return reviewedHunters; }
+    public Set<String> timedOutHunters() { return timedOutHunters; }
+    public Set<String> failedHunters() { return failedHunters; }
+    public int totalCandidateCount() { return totalCandidateCount; }
 
     public void sourceType(String sourceType) { this.sourceType = sourceType; }
     public void gitUrl(String gitUrl) { this.gitUrl = gitUrl; }
@@ -113,6 +128,61 @@ public final class AuditJob {
     }
     public void cacheKey(String cacheKey) { this.cacheKey = cacheKey == null ? "" : cacheKey; }
     public void logDone(boolean logDone) { this.logDone = logDone; }
+    public void totalCandidateCount(int totalCandidateCount) {
+        this.totalCandidateCount = totalCandidateCount;
+    }
+    public void restoreSelectedInterfaceIds(Set<String> selectedInterfaceIds) {
+        this.selectedInterfaceIds = Set.copyOf(selectedInterfaceIds);
+    }
+
+    /**
+     * Single entry point for a completed scheduling round: merges this round's
+     * hunter outcomes into the job's accumulated state and flips status to
+     * PARTIAL (more rounds pending) or DONE (drained or ceiling reached).
+     * Synchronized so a concurrent API reader never observes status ahead of
+     * the findings/coverage fields it's paired with.
+     */
+    public synchronized void mergeRoundOutcome(
+            int round,
+            List<Map<String, Object>> mergedFindings,
+            Set<String> reviewedThisRound,
+            Set<String> timedOutThisRound,
+            Set<String> retryableFailedThisRound,
+            boolean moreRoundsRemain,
+            boolean ceilingHitNow
+    ) {
+        this.findings = List.copyOf(mergedFindings);
+        this.roundsCompleted = round;
+        this.reviewedHunters = union(this.reviewedHunters, reviewedThisRound);
+        this.timedOutHunters = union(this.timedOutHunters, timedOutThisRound);
+        this.failedHunters = Set.copyOf(retryableFailedThisRound);
+        this.continuationComplete = !moreRoundsRemain;
+        this.ceilingHit = ceilingHitNow;
+        setStatus(moreRoundsRemain ? JobStatus.PARTIAL : JobStatus.DONE);
+    }
+
+    /**
+     * Rehydrates round-scheduling state from a persisted progress file on
+     * restart. Distinct from mergeRoundOutcome: this is "reconstruct prior
+     * state," not "a round just finished."
+     */
+    public synchronized void restoreProgress(
+            int roundsCompleted,
+            Set<String> reviewedHunters,
+            Set<String> timedOutHunters,
+            Set<String> failedHunters
+    ) {
+        this.roundsCompleted = roundsCompleted;
+        this.reviewedHunters = Set.copyOf(reviewedHunters);
+        this.timedOutHunters = Set.copyOf(timedOutHunters);
+        this.failedHunters = Set.copyOf(failedHunters);
+    }
+
+    private static Set<String> union(Set<String> existing, Set<String> additional) {
+        Set<String> merged = new LinkedHashSet<>(existing);
+        merged.addAll(additional);
+        return Set.copyOf(merged);
+    }
 
     public Map<String, Object> toMeta() {
         Map<String, Object> meta = new LinkedHashMap<>();
@@ -126,6 +196,9 @@ public final class AuditJob {
         meta.put("updated_at", updatedAt.toString());
         meta.put("findings_count", findings.size());
         meta.put("selected_interface_ids", selectedInterfaceIds);
+        meta.put("rounds_completed", roundsCompleted);
+        meta.put("continuation_complete", continuationComplete);
+        meta.put("cache_key", cacheKey);
         return meta;
     }
 }

@@ -1,7 +1,6 @@
 package com.huawei.audit.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -22,6 +21,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -81,7 +81,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_super123"));
         java.nio.file.Files.createDirectories(job.workDir());
 
-        var result = supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of("web_framework", "Spring Boot"),
@@ -100,10 +100,13 @@ class SupervisorAgentTest {
                         "unsafe_parsing", taskFile("unsafe_parsing", 0).toString()
                 ),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
-        assertThat(result.selectedHunters())
+        assertThat(result.reviewed())
                 .contains(
                         "code_execution",
                         "authorization",
@@ -159,7 +162,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_fenced123"));
         java.nio.file.Files.createDirectories(job.workDir());
 
-        var result = supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -170,7 +173,10 @@ class SupervisorAgentTest {
                 ),
                 Map.of("sql_injection", taskFile("sql_injection", 1).toString()),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         assertThat(result.findings()).hasSize(1);
@@ -206,20 +212,27 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_plain123"));
         java.nio.file.Files.createDirectories(job.workDir());
 
-        assertThatThrownBy(() -> supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
                 List.of("code_execution", "authorization", "ssrf"),
                 Map.of("code_execution", taskFile("code_execution", 1).toString()),
                 Map.of(),
-                Map.of()
-        ))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("all AgentScope hunter sessions failed")
-                .hasMessageContaining("supervisor response unparseable")
-                .hasMessageContaining("supervisor did not return a JSON object")
-                .hasMessageContaining("I'll start by examining");
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
+        );
+
+        assertThat(result.timedOut()).containsExactly("code_execution");
+        assertThat(result.reviewed()).isEmpty();
+        assertThat(result.retryableFailures()).isEmpty();
+        assertThat(result.findings()).isEmpty();
+        assertThat(result.rationale())
+                .contains("supervisor response unparseable")
+                .contains("supervisor did not return a JSON object")
+                .contains("I'll start by examining");
 
         assertThat(job.workDir().resolve("supervisor-response-code_execution.txt"))
                 .isRegularFile();
@@ -263,14 +276,17 @@ class SupervisorAgentTest {
                 Confirm only with source-level SQL construction evidence.
                 """);
 
-        supervisor.run(
+        supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
                 List.of("sql_injection"),
                 Map.of("sql_injection", "tasks/sql.json"),
                 Map.of("sql_injection", "audit-sql-injection"),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
@@ -318,7 +334,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_filter123"));
         Files.createDirectories(job.workDir());
 
-        supervisor.run(
+        supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -329,7 +345,10 @@ class SupervisorAgentTest {
                         "file_operations", taskFile("file_operations", 0).toString()
                 ),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
@@ -378,7 +397,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_parallel123"));
         Files.createDirectories(job.workDir());
 
-        supervisor.run(
+        supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -388,7 +407,10 @@ class SupervisorAgentTest {
                         "authorization", authorizationTaskFile().toString()
                 ),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
@@ -454,7 +476,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_limited123"));
         Files.createDirectories(job.workDir());
 
-        supervisor.run(
+        supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -465,7 +487,10 @@ class SupervisorAgentTest {
                         "ssrf", taskFile("ssrf", 1).toString()
                 ),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         verify(gateway, times(3)).supervise(any(), any(), any(), any(), any());
@@ -493,7 +518,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_empty123"));
         Files.createDirectories(job.workDir());
 
-        var result = supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -503,11 +528,14 @@ class SupervisorAgentTest {
                         "file_operations", taskFile("file_operations", 0).toString()
                 ),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         verify(gateway, never()).supervise(any(), any(), any(), any(), any());
-        assertThat(result.selectedHunters()).isEmpty();
+        assertThat(result.reviewed()).isEmpty();
         assertThat(result.findings()).isEmpty();
         assertThat(job.workDir().resolve("supervisor-response.txt"))
                 .isRegularFile();
@@ -572,14 +600,17 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_budget123"));
         Files.createDirectories(job.workDir());
 
-        supervisor.run(
+        supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
                 List.of("ssrf"),
                 Map.of("ssrf", taskFileWithDecision("ssrf", 36, 11).toString()),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
@@ -626,14 +657,17 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_surface123"));
         Files.createDirectories(job.workDir());
 
-        var result = supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
                 List.of("http_output"),
                 Map.of("http_output", endpointSurfaceTask("http_output").toString()),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
@@ -641,7 +675,7 @@ class SupervisorAgentTest {
         verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
 
         assertThat(agentsCaptor.getValue()).containsOnlyKeys("http_output");
-        assertThat(result.selectedHunters()).containsExactly("http_output");
+        assertThat(result.reviewed()).containsExactly("http_output");
     }
 
     @Test
@@ -669,7 +703,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_surfacebatch123"));
         Files.createDirectories(job.workDir());
 
-        var result = supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -677,7 +711,10 @@ class SupervisorAgentTest {
                 Map.of("http_output_batch_2",
                         endpointChunkOnlyTask("http_output").toString()),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
@@ -685,11 +722,11 @@ class SupervisorAgentTest {
         verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
 
         assertThat(agentsCaptor.getValue()).containsOnlyKeys("http_output_batch_2");
-        assertThat(result.selectedHunters()).containsExactly("http_output_batch_2");
+        assertThat(result.reviewed()).containsExactly("http_output_batch_2");
     }
 
     @Test
-    void consolidatesDuplicateFindingsFromParallelHunters()
+    void returnsRawFindingsWithoutConsolidatingWithinARound()
             throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
         when(gateway.supervise(any(), any(), any(), any(), any()))
@@ -730,7 +767,7 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_dedup123"));
         Files.createDirectories(job.workDir());
 
-        var result = supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
@@ -741,17 +778,18 @@ class SupervisorAgentTest {
                         taskFile("code_execution_team_general_endpoint_review", 1).toString()
                 ),
                 Map.of(),
-                Map.of()
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
         );
 
-        assertThat(result.findings()).singleElement().satisfies(finding -> {
-            assertThat(finding)
-                    .containsEntry("vuln_type", "COMMAND_INJECTION")
-                    .containsEntry("http_path", "/rce/runtime/exec")
-                    .containsEntry("merged_count", 2);
-            assertThat((List<?>) finding.get("merged_from")).hasSize(2);
-        });
-        assertThat(result.rationale()).contains("finding consolidation");
+        // Consolidation across duplicate reports now happens once in
+        // IntelligentAuditGraph over the full accumulated multi-round set, not
+        // per round here — so both raw findings come back untouched.
+        assertThat(result.findings()).hasSize(2);
+        assertThat(result.reviewed()).containsExactlyInAnyOrder(
+                "code_execution", "code_execution_team_general_endpoint_review");
     }
 
     @Test
@@ -775,7 +813,6 @@ class SupervisorAgentTest {
                 gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
-                new FindingConsolidator(),
                 new OrchestratorProperties(true, 10, 5, 80),
                 new JobLogBroker(),
                 AuditMemoryService.NOOP,
@@ -794,13 +831,120 @@ class SupervisorAgentTest {
                     .toString());
         }
 
-        supervisor.run(job, Path.of("source"), Map.of(), candidates,
-                manifest, Map.of(), Map.of());
+        supervisor.runRound(job, Path.of("source"), Map.of(), candidates,
+                manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of());
 
         assertThat(calls).hasValue(24);
         assertThat(invoked)
                 .contains("ssrf_batch_0", "ssrf_batch_23")
                 .doesNotContain("ssrf_batch_24", "ssrf_batch_29");
+    }
+
+    @Test
+    void reservesSlotsForEachMandatoryCategoryBeforeFillingByPriority()
+            throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        List<String> invoked = new ArrayList<>();
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    calls.incrementAndGet();
+                    Map<String, ClaudeGateway.AgentDef> agents =
+                            invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    invoked.add(hunter);
+                    return """
+                            {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                            """.formatted(hunter);
+                });
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                Duration.ofSeconds(5),
+                Duration.ofSeconds(1)
+        );
+        AuditJob job = new AuditJob("mandatory123", "java");
+        job.workDir(tempDir.resolve("audit_mandatory123"));
+        Files.createDirectories(job.workDir());
+
+        // 25 non-mandatory batches all scored far above the 3 mandatory
+        // categories, so a pure global-priority sort would crowd every
+        // mandatory category out of the 24-slot cap entirely.
+        List<String> candidates = new ArrayList<>();
+        Map<String, String> manifest = new LinkedHashMap<>();
+        for (int i = 0; i < 25; i++) {
+            String hunter = "sql_injection_batch_" + i;
+            candidates.add(hunter);
+            manifest.put(hunter, taskFileWithDecision(hunter, 16, 200).toString());
+        }
+        for (String mandatory : List.of("authorization", "code_execution", "ssrf")) {
+            candidates.add(mandatory);
+            manifest.put(mandatory, taskFileWithDecision(mandatory, 16, 5).toString());
+        }
+
+        supervisor.runRound(job, Path.of("source"), Map.of(), candidates,
+                manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of());
+
+        assertThat(calls).hasValue(24);
+        assertThat(invoked).contains("authorization", "code_execution", "ssrf");
+    }
+
+    @Test
+    void retryableModelSlotFailuresAreDistinctFromTerminalTimeouts()
+            throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Thread.sleep(300);
+                    Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    return """
+                            {"selected_hunters":["%s"],"rationale":"ok","findings":[]}
+                            """.formatted(hunter);
+                });
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                Duration.ofSeconds(5),
+                Duration.ofMillis(50)
+        );
+        AuditJob job = new AuditJob("slotwait123", "java");
+        job.workDir(tempDir.resolve("audit_slotwait123"));
+        Files.createDirectories(job.workDir());
+
+        // 3 hunters, only 2 model slots: the 3rd cannot acquire within 50ms
+        // and never actually runs, so it must be classified retryable, not a
+        // terminal timeout.
+        var result = supervisor.runRound(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("code_execution", "authorization", "ssrf"),
+                Map.of(
+                        "code_execution", taskFile("code_execution", 1).toString(),
+                        "authorization", authorizationTaskFile().toString(),
+                        "ssrf", taskFile("ssrf", 1).toString()
+                ),
+                Map.of(),
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
+        );
+
+        assertThat(result.reviewed()).hasSize(2);
+        assertThat(result.retryableFailures()).hasSize(1);
+        assertThat(result.timedOut()).isEmpty();
     }
 
     @Test
@@ -818,7 +962,6 @@ class SupervisorAgentTest {
                 gateway,
                 objectMapper,
                 new FindingParser(objectMapper),
-                new FindingConsolidator(),
                 new OrchestratorProperties(true, 10, 5, 80),
                 new JobLogBroker(),
                 AuditMemoryService.NOOP,
@@ -829,18 +972,67 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_timeout123"));
         Files.createDirectories(job.workDir());
 
-        assertThatThrownBy(() -> supervisor.run(
+        var result = supervisor.runRound(
                 job,
                 Path.of("source"),
                 Map.of(),
                 List.of("ssrf"),
                 Map.of("ssrf", taskFile("ssrf", 1).toString()),
                 Map.of(),
-                Map.of()
-        ))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("all AgentScope hunter sessions failed")
-                .hasMessageContaining("timed out after");
+                Map.of(),
+                Set.of(),
+                Set.of(),
+                Set.of()
+        );
+
+        assertThat(result.timedOut()).containsExactly("ssrf");
+        assertThat(result.reviewed()).isEmpty();
+        assertThat(result.retryableFailures()).isEmpty();
+        assertThat(result.rationale()).contains("timed out after");
+    }
+
+    @Test
+    void hunterSessionTimeoutIsTerminalNotRetryable() throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Thread.sleep(TimeUnit.SECONDS.toMillis(5));
+                    return """
+                            {"selected_hunters":["ssrf"],"rationale":"late","findings":[]}
+                            """;
+                });
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                Duration.ofMillis(100),
+                Duration.ofMillis(50)
+        );
+        AuditJob job = new AuditJob("timeoutretry123", "java");
+        job.workDir(tempDir.resolve("audit_timeoutretry123"));
+        Files.createDirectories(job.workDir());
+        Map<String, String> manifest = Map.of("ssrf", taskFile("ssrf", 1).toString());
+
+        var firstRound = supervisor.runRound(
+                job, Path.of("source"), Map.of(), List.of("ssrf"),
+                manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of()
+        );
+        assertThat(firstRound.timedOut()).containsExactly("ssrf");
+
+        // The orchestrator would pass this hunter back as alreadyTimedOut on
+        // the next round; it must be excluded, never re-attempted.
+        var secondRound = supervisor.runRound(
+                job, Path.of("source"), Map.of(), List.of("ssrf"),
+                manifest, Map.of(), Map.of(), Set.of(), Set.of("ssrf"), Set.of()
+        );
+        assertThat(secondRound.reviewed()).isEmpty();
+        assertThat(secondRound.timedOut()).isEmpty();
+        assertThat(secondRound.retryableFailures()).isEmpty();
+        assertThat(secondRound.findings()).isEmpty();
     }
 
     private Path taskFile(String hunter, int candidateCount) throws Exception {

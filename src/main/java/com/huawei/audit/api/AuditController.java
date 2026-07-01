@@ -226,7 +226,9 @@ public class AuditController {
     @GetMapping("/audit/{jobId}/findings")
     public ResponseEntity<FindingsResponse> findings(@PathVariable String jobId) {
         AuditJob job = requireJob(jobId);
-        if (job.status() != JobStatus.DONE && job.status() != JobStatus.FAILED) {
+        JobStatus status = job.status();
+        if (status != JobStatus.DONE && status != JobStatus.FAILED
+                && status != JobStatus.PARTIAL) {
             return ResponseEntity.status(HttpStatus.ACCEPTED).build();
         }
         return ResponseEntity.ok(FindingsResponse.from(job));

@@ -241,6 +241,7 @@
             <span id="dBadge"></span>
           </div>
           <div id="dSrc" class="text-xs text-slate-400 truncate"></div>
+          <div id="dCoverage" class="hidden text-xs text-amber-600 mt-0.5"></div>
         </div>
         <div class="flex items-center gap-3 shrink-0">
           <span id="dCount" class="hidden text-xs px-2.5 py-1 rounded-full font-medium
@@ -643,7 +644,8 @@ async function loadJobs() {
     renderList(list);
     if (selId && jobs[selId]) {
       updateHeader(jobs[selId]);
-      if (jobs[selId].status === 'done') loadFindings(selId);
+      const st = jobs[selId].status;
+      if (st === 'done' || st === 'partial') loadFindings(selId);
     }
   } catch { /* retry next tick */ }
 }
@@ -698,7 +700,7 @@ function select(id) {
   const j = jobs[id];
   if (j) {
     updateHeader(j);
-    if (j.status === 'done')   loadFindings(id);
+    if (j.status === 'done' || j.status === 'partial') loadFindings(id);
     if (j.status === 'failed' && j.error) addLog(`[FATAL] ${j.error}`, 'err');
   }
   startES(id);
@@ -715,6 +717,20 @@ function updateHeader(j) {
     fc.textContent = `${j.findings_count} findings`;
     fc.classList.remove('hidden');
   } else fc.classList.add('hidden');
+
+  const cov = document.getElementById('dCoverage');
+  const p = j.progress;
+  if (p && !p.complete) {
+    cov.textContent = `第${p.round}轮 · 已审查${p.reviewedCount} · 超时${p.timedOutCount} · 待处理${p.remainingCount} · 后台继续审计中`;
+    cov.classList.remove('hidden');
+  } else if (p && p.complete && p.round > 0) {
+    cov.textContent = p.ceilingHit
+      ? `审计已达轮次/时长上限，可能未覆盖全部候选（已审查${p.reviewedCount}/${p.totalCandidates}）`
+      : `审计完成`;
+    cov.classList.remove('hidden');
+  } else {
+    cov.classList.add('hidden');
+  }
 }
 
 // ── Log streaming ──────────────────────────────────────────────────
@@ -1284,11 +1300,12 @@ function mkBadge(status, lg=false) {
     pending:     ['⏳','text-slate-500 bg-slate-100'],
     cloning:     ['⬇','text-blue-600 bg-blue-50'],
     running:     ['▶','text-emerald-600 bg-emerald-50'],
+    partial:     ['◐','text-amber-600 bg-amber-50'],
     done:        ['✓','text-emerald-600 bg-emerald-50'],
     failed:      ['✗','text-red-600 bg-red-50'],
   };
   const [icon,cls] = m[status]||['?','text-slate-500 bg-slate-100'];
-  const anim = ['running','cloning'].includes(status)?' pulse':'';
+  const anim = ['running','cloning','partial'].includes(status)?' pulse':'';
   const px   = lg ? 'px-2 py-0.5 text-xs' : 'px-1.5 py-0.5 text-xs';
   return `<span class="inline-flex items-center gap-1 rounded-full font-medium ${px} ${cls}${anim}">${icon} ${status}</span>`;
 }

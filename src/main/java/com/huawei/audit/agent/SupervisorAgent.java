@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,7 +62,6 @@ public class SupervisorAgent {
     private final ClaudeGateway gateway;
     private final ObjectMapper objectMapper;
     private final FindingParser findingParser;
-    private final FindingConsolidator findingConsolidator;
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
     private final AuditMemoryService auditMemory;
@@ -73,13 +73,11 @@ public class SupervisorAgent {
             ClaudeGateway gateway,
             ObjectMapper objectMapper,
             FindingParser findingParser,
-            FindingConsolidator findingConsolidator,
             OrchestratorProperties properties,
             JobLogBroker logs,
             AuditMemoryService auditMemory
     ) {
-        this(gateway, objectMapper, findingParser, findingConsolidator,
-                properties, logs, auditMemory,
+        this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
                 DEFAULT_HUNTER_SESSION_TIMEOUT, DEFAULT_MODEL_SLOT_TIMEOUT);
     }
 
@@ -87,7 +85,6 @@ public class SupervisorAgent {
             ClaudeGateway gateway,
             ObjectMapper objectMapper,
             FindingParser findingParser,
-            FindingConsolidator findingConsolidator,
             OrchestratorProperties properties,
             JobLogBroker logs,
             AuditMemoryService auditMemory,
@@ -97,7 +94,6 @@ public class SupervisorAgent {
         this.gateway = gateway;
         this.objectMapper = objectMapper;
         this.findingParser = findingParser;
-        this.findingConsolidator = findingConsolidator;
         this.properties = properties;
         this.logs = logs;
         this.auditMemory = auditMemory;
@@ -114,34 +110,36 @@ public class SupervisorAgent {
             OrchestratorProperties properties,
             JobLogBroker logs
     ) {
-        this(gateway, objectMapper, findingParser, new FindingConsolidator(), properties, logs,
+        this(gateway, objectMapper, findingParser, properties, logs,
                 AuditMemoryService.NOOP);
     }
 
-    public SupervisorAgent(
-            ClaudeGateway gateway,
-            ObjectMapper objectMapper,
-            FindingParser findingParser,
-            OrchestratorProperties properties,
-            JobLogBroker logs,
-            AuditMemoryService auditMemory
-    ) {
-        this(gateway, objectMapper, findingParser, new FindingConsolidator(), properties, logs,
-                auditMemory);
-    }
-
-    public SupervisorResult run(
+    public RoundResult runRound(
             AuditJob job,
             Path sourceRoot,
             Map<String, Object> techProfile,
             List<String> candidates,
             Map<String, String> evidenceManifest,
             Map<String, String> skillManifest,
-            Map<String, Object> analysisSummary
+            Map<String, Object> analysisSummary,
+            Set<String> alreadyReviewed,
+            Set<String> alreadyTimedOut,
+            Set<String> alreadyFailed
     ) throws Exception {
-        Map<String, ClaudeGateway.AgentDef> agents = buildAgentDefs(
-                job.workDir(), sourceRoot, candidates, evidenceManifest, skillManifest
+        Set<String> alreadyAttempted = new LinkedHashSet<>(alreadyReviewed);
+        alreadyAttempted.addAll(alreadyTimedOut);
+        // alreadyFailed (retryable model-slot-wait failures) is intentionally
+        // NOT excluded here — those hunters never actually ran and stay
+        // eligible for this and future rounds.
+
+        List<AgentBuild> eligible = collectEligibleBuilds(
+                job.workDir(), sourceRoot, candidates, evidenceManifest,
+                skillManifest, alreadyAttempted
         );
+        Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
+        selectRoundBuilds(eligible, job)
+                .forEach(build -> agents.put(build.hunter(), build.agentDef()));
+
         logs.publish(
                 job,
                 "[supervisor-agent] starting AgentScope Java hunter sessions"
@@ -160,48 +158,46 @@ public class SupervisorAgent {
                     job,
                     "[supervisor-agent] no evidence packages contain candidate review work; skipping AgentScope"
             );
-            return new SupervisorResult(
-                    List.of(),
-                    "no evidence packages contain candidate review work",
-                    List.of()
+            return new RoundResult(
+                    List.of(), List.of(), List.of(), List.of(),
+                    "no evidence packages contain candidate review work"
             );
         }
-        SupervisorEnvelope envelope = superviseHunters(
+        RoundResult result = superviseHunters(
                 job,
                 sourceRoot,
                 techProfile,
                 analysisSummary,
                 agents
         );
-        String response = responseJson(envelope);
+        String response = responseJson(result);
         Files.writeString(
                 job.workDir().resolve("supervisor-response.txt"),
                 response
         );
         logs.publish(
                 job,
-                "[supervisor-agent] completed; delegated="
-                        + String.join(", ", envelope.selectedHunters())
-                        + ", findings=" + envelope.findings().size()
+                "[supervisor-agent] round completed; reviewed="
+                        + result.reviewed().size()
+                        + ", timedOut=" + result.timedOut().size()
+                        + ", retryableFailures=" + result.retryableFailures().size()
+                        + ", findings=" + result.findings().size()
         );
-        return new SupervisorResult(
-                envelope.selectedHunters(),
-                envelope.rationale(),
-                envelope.findings()
-        );
+        return result;
     }
 
-    private SupervisorEnvelope superviseHunters(
+    private RoundResult superviseHunters(
             AuditJob job,
             Path sourceRoot,
             Map<String, Object> techProfile,
             Map<String, Object> analysisSummary,
             Map<String, ClaudeGateway.AgentDef> agents
     ) throws Exception {
-        LinkedHashSet<String> selectedHunters = new LinkedHashSet<>();
+        List<String> reviewed = new ArrayList<>();
+        List<String> timedOut = new ArrayList<>();
+        List<String> retryableFailures = new ArrayList<>();
         List<String> rationaleParts = new ArrayList<>();
         List<Map<String, Object>> findings = new ArrayList<>();
-        List<String> failures = new ArrayList<>();
         List<SessionFuture> futures = new ArrayList<>();
         Semaphore sessionSlots = new Semaphore(MAX_PARALLEL_HUNTER_SESSIONS);
 
@@ -222,15 +218,18 @@ public class SupervisorAgent {
             for (SessionFuture future : futures) {
                 HunterSessionResult result = await(future);
                 if (result.failure() != null) {
-                    failures.add(result.hunter() + ": " + result.failure());
                     rationaleParts.add(
                             result.hunter() + ": failed - " + result.failure()
                     );
+                    if (isRetryableFailure(result.failure())) {
+                        retryableFailures.add(result.hunter());
+                    } else {
+                        timedOut.add(result.hunter());
+                    }
                     continue;
                 }
                 SupervisorEnvelope envelope = result.envelope();
-                selectedHunters.add(result.hunter());
-                selectedHunters.addAll(envelope.selectedHunters());
+                reviewed.add(result.hunter());
                 rationaleParts.add(result.hunter() + ": " + envelope.rationale());
                 findings.addAll(envelope.findings());
             }
@@ -238,25 +237,25 @@ public class SupervisorAgent {
             executor.shutdownNow();
         }
 
-        if (selectedHunters.isEmpty() && !failures.isEmpty()) {
-            throw new IllegalStateException(
-                    "all AgentScope hunter sessions failed: "
-                            + String.join("; ", failures)
-            );
-        }
-        List<Map<String, Object>> consolidated = findingConsolidator.consolidate(findings);
-        if (consolidated.size() != findings.size()) {
-            rationaleParts.add("finding consolidation: "
-                    + findings.size() + " raw findings -> "
-                    + consolidated.size() + " merged findings");
-            logs.publish(job, "[supervisor-agent] consolidated findings: raw="
-                    + findings.size() + ", merged=" + consolidated.size());
-        }
-        return new SupervisorEnvelope(
-                List.copyOf(selectedHunters),
-                String.join(" | ", rationaleParts),
-                consolidated
+        return new RoundResult(
+                List.copyOf(findings),
+                List.copyOf(reviewed),
+                List.copyOf(timedOut),
+                List.copyOf(retryableFailures),
+                String.join(" | ", rationaleParts)
         );
+    }
+
+    /**
+     * Only "never actually got to run because no model slot freed up in time"
+     * is retryable. A session that ran the full timeout, crashed, or returned
+     * an unparseable response is terminal — retrying it is expected to
+     * reproduce the same outcome.
+     */
+    private static boolean isRetryableFailure(String failureMessage) {
+        return failureMessage != null
+                && (failureMessage.startsWith("timed out waiting for model slot")
+                        || failureMessage.equals("interrupted while waiting for model slot"));
     }
 
     private HunterSessionResult superviseHunter(
@@ -402,11 +401,11 @@ public class SupervisorAgent {
         }
     }
 
-    private String responseJson(SupervisorEnvelope envelope) throws Exception {
+    private String responseJson(RoundResult result) throws Exception {
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("selected_hunters", envelope.selectedHunters());
-        response.put("rationale", envelope.rationale());
-        response.put("findings", envelope.findings());
+        response.put("selected_hunters", result.reviewed());
+        response.put("rationale", result.rationale());
+        response.put("findings", result.findings());
         return objectMapper.writeValueAsString(response);
     }
 
@@ -432,14 +431,14 @@ public class SupervisorAgent {
         return value.replaceAll("[^A-Za-z0-9._-]", "_");
     }
 
-    private Map<String, ClaudeGateway.AgentDef> buildAgentDefs(
+    private List<AgentBuild> collectEligibleBuilds(
             Path workDirectory,
             Path sourceRoot,
             List<String> candidates,
             Map<String, String> evidenceManifest,
-            Map<String, String> skillManifest
+            Map<String, String> skillManifest,
+            Set<String> alreadyAttempted
     ) throws IOException {
-        Map<String, ClaudeGateway.AgentDef> agents = new LinkedHashMap<>();
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
         List<String> readOnlyTools = List.of(
                 "read_file",
@@ -449,6 +448,9 @@ public class SupervisorAgent {
         );
         List<AgentBuild> builds = new ArrayList<>();
         for (String hunter : candidates) {
+            if (alreadyAttempted.contains(hunter)) {
+                continue;
+            }
             String taskPath = evidenceManifest.get(hunter);
             if (taskPath == null) {
                 continue;
@@ -478,15 +480,72 @@ public class SupervisorAgent {
                     String.valueOf(decision.getOrDefault("rationale", ""))
             )));
         }
-        List<AgentBuild> selectedBuilds = builds.stream()
+        return builds;
+    }
+
+    /**
+     * Reserves a slot for every batch of each not-yet-attempted mandatory
+     * category first (all batches, not one representative — the supervisor
+     * prompt's own invariant is that all batches of a category are jointly
+     * mandatory), then fills remaining slots by global priority score, capped
+     * at MAX_HUNTER_SESSIONS_PER_JOB. With only one category present this
+     * degrades to a plain priority sort, identical to the pre-existing
+     * behavior.
+     */
+    private List<AgentBuild> selectRoundBuilds(List<AgentBuild> eligible, AuditJob job) {
+        Set<String> mandatoryNeeded = new LinkedHashSet<>();
+        for (AgentBuild build : eligible) {
+            String base = baseHunterName(build.hunter());
+            if (MANDATORY.contains(base)) {
+                mandatoryNeeded.add(base);
+            }
+        }
+        List<AgentBuild> reserved = new ArrayList<>();
+        for (String mandatoryBase : MANDATORY) {
+            if (!mandatoryNeeded.contains(mandatoryBase)) {
+                continue;
+            }
+            List<AgentBuild> batchesForCategory = eligible.stream()
+                    .filter(build -> baseHunterName(build.hunter()).equals(mandatoryBase))
+                    .sorted(Comparator
+                            .comparingInt((AgentBuild build) -> build.agentDef().priority())
+                            .reversed()
+                            .thenComparing(AgentBuild::hunter))
+                    .toList();
+            if (reserved.size() < MAX_HUNTER_SESSIONS_PER_JOB
+                    && reserved.size() + batchesForCategory.size() > MAX_HUNTER_SESSIONS_PER_JOB) {
+                logs.publish(job, "[supervisor-agent] mandatory category "
+                        + mandatoryBase + " alone has " + batchesForCategory.size()
+                        + " batches, exceeding the per-round cap of "
+                        + MAX_HUNTER_SESSIONS_PER_JOB
+                        + "; remaining batches and other categories deferred to a later round");
+            }
+            for (AgentBuild build : batchesForCategory) {
+                if (reserved.size() >= MAX_HUNTER_SESSIONS_PER_JOB) {
+                    break;
+                }
+                reserved.add(build);
+            }
+        }
+        Set<String> reservedHunters = new LinkedHashSet<>();
+        reserved.forEach(build -> reservedHunters.add(build.hunter()));
+
+        List<AgentBuild> remaining = eligible.stream()
+                .filter(build -> !reservedHunters.contains(build.hunter()))
                 .sorted(Comparator
                         .comparingInt((AgentBuild build) -> build.agentDef().priority())
                         .reversed()
                         .thenComparing(AgentBuild::hunter))
-                .limit(MAX_HUNTER_SESSIONS_PER_JOB)
                 .toList();
-        selectedBuilds.forEach(build -> agents.put(build.hunter(), build.agentDef()));
-        return agents;
+
+        List<AgentBuild> selected = new ArrayList<>(reserved);
+        for (AgentBuild build : remaining) {
+            if (selected.size() >= MAX_HUNTER_SESSIONS_PER_JOB) {
+                break;
+            }
+            selected.add(build);
+        }
+        return selected;
     }
 
     private Map<String, Object> harnessDecision(Path taskPath) {
@@ -961,9 +1020,11 @@ public class SupervisorAgent {
         return value;
     }
 
-    public record SupervisorResult(
-            List<String> selectedHunters,
-            String rationale,
-            List<Map<String, Object>> findings
+    public record RoundResult(
+            List<Map<String, Object>> findings,
+            List<String> reviewed,
+            List<String> timedOut,
+            List<String> retryableFailures,
+            String rationale
     ) { }
 }

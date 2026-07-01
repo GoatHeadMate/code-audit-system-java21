@@ -104,7 +104,8 @@ public final class ApiDtos {
             String sourceType,
             String gitUrl,
             String error,
-            int findingsCount
+            int findingsCount,
+            ProgressInfo progress
     ) {
         public static JobStatusResponse from(AuditJob job) {
             return new JobStatusResponse(
@@ -116,7 +117,8 @@ public final class ApiDtos {
                     job.sourceType(),
                     job.gitUrl(),
                     job.error(),
-                    job.findingsCount()
+                    job.findingsCount(),
+                    ProgressInfo.from(job)
             );
         }
     }
@@ -129,7 +131,8 @@ public final class ApiDtos {
             List<Map<String, Object>> findings,
             Map<String, Object> stats,
             Map<String, Object> techProfile,
-            Map<String, Object> taskSummary
+            Map<String, Object> taskSummary,
+            ProgressInfo progress
     ) {
         public static FindingsResponse from(AuditJob job) {
             return new FindingsResponse(
@@ -138,7 +141,44 @@ public final class ApiDtos {
                     job.findings(),
                     job.stats(),
                     job.techProfile(),
-                    job.taskSummary()
+                    job.taskSummary(),
+                    ProgressInfo.from(job)
+            );
+        }
+    }
+
+    /**
+     * Round-scheduling coverage for a job. `complete` means no further
+     * automatic continuation will happen (either the candidate pool drained,
+     * or the round/time safety ceiling was reached) — not that every
+     * candidate was necessarily reviewed; check ceilingHit for that
+     * distinction.
+     */
+    public record ProgressInfo(
+            int round,
+            int totalCandidates,
+            int reviewedCount,
+            int timedOutCount,
+            int retryableFailureCount,
+            int remainingCount,
+            boolean complete,
+            boolean ceilingHit
+    ) {
+        public static ProgressInfo from(AuditJob job) {
+            int total = job.totalCandidateCount();
+            int reviewed = job.reviewedHunters().size();
+            int timedOut = job.timedOutHunters().size();
+            int failed = job.failedHunters().size();
+            int remaining = Math.max(0, total - reviewed - timedOut);
+            return new ProgressInfo(
+                    job.roundsCompleted(),
+                    total,
+                    reviewed,
+                    timedOut,
+                    failed,
+                    remaining,
+                    job.continuationComplete(),
+                    job.ceilingHit()
             );
         }
     }

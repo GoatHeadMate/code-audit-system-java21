@@ -58,6 +58,17 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
         executor.submit(() -> run(job));
     }
 
+    @Override
+    public void resume(AuditJob job) {
+        // Resumed continuations skip jobSlots entirely: this job was already
+        // admitted once (it reached PARTIAL before a restart), it's not new
+        // intake work competing with fresh submissions, and its source is
+        // already prepared on disk. Gating it on the same admission semaphore
+        // as submit() would let a long multi-round continuation starve new
+        // audits from ever starting after a crash.
+        executor.submit(() -> runResumed(job));
+    }
+
     private void run(AuditJob job) {
         boolean acquired = false;
         try {
@@ -82,23 +93,7 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
 
             IntelligentAuditGraph.AuditResult result = intelligentGraph.invoke(
                     job, source.sourceRoot(), techProfile, candidates);
-            job.findings(result.finalFindings());
-            job.stats(result.stats());
-            job.taskSummary(result.taskSummary());
-
-            Path output = job.workDir().resolve("findings.json");
-            Files.writeString(
-                    output,
-                    objectMapper.writerWithDefaultPrettyPrinter()
-                            .writeValueAsString(result.finalFindings())
-            );
-            job.setStatus(JobStatus.DONE);
-            logs.publish(
-                    job,
-                    "audit completed: " + result.finalFindings().size()
-                            + " findings -> " + output
-            );
-            persistMeta(job);
+            finish(job, result);
         } catch (Exception exception) {
             String error = rootCauseMessage(exception);
             job.fail(error);
@@ -110,6 +105,60 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
             }
             logs.finish(job);
         }
+    }
+
+    private void runResumed(AuditJob job) {
+        try {
+            SourceWorkspaceService.PreparedSource source = sources.prepare(job);
+            job.setStatus(JobStatus.RUNNING);
+            Map<String, Object> techProfile = techScanner.scan(source.sourceRoot());
+            job.techProfile(techProfile);
+            logs.publish(
+                    job,
+                    "tech_profile: " + objectMapper.writeValueAsString(techProfile)
+            );
+
+            List<String> candidates = scheduler.schedule(techProfile);
+            logs.publish(job,
+                    "[orchestrator] resumed candidate hunters: " + String.join(", ", candidates));
+
+            IntelligentAuditGraph.AuditResult result = intelligentGraph.invokeResumed(
+                    job, source.sourceRoot(), techProfile, candidates,
+                    job.reviewedHunters(), job.timedOutHunters(), job.failedHunters());
+            finish(job, result);
+        } catch (Exception exception) {
+            String error = rootCauseMessage(exception);
+            // Only status/error change here — job.findings() already holds
+            // whatever prior rounds accumulated and stays intact and queryable.
+            job.fail(error);
+            logs.publish(job, "[FATAL] " + error);
+            persistMeta(job);
+        } finally {
+            logs.finish(job);
+        }
+    }
+
+    private void finish(AuditJob job, IntelligentAuditGraph.AuditResult result) throws Exception {
+        job.findings(result.finalFindings());
+        job.stats(result.stats());
+        job.taskSummary(result.taskSummary());
+
+        Path output = job.workDir().resolve("findings.json");
+        Files.writeString(
+                output,
+                objectMapper.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(result.finalFindings())
+        );
+        // Defensive final assertion of terminal state: IntelligentAuditGraph's
+        // round loop already set DONE via job.mergeRoundOutcome() once the
+        // candidate pool was drained or the round/time ceiling was hit.
+        job.setStatus(JobStatus.DONE);
+        logs.publish(
+                job,
+                "audit completed: " + result.finalFindings().size()
+                        + " findings -> " + output
+        );
+        persistMeta(job);
     }
 
     private void persistMeta(AuditJob job) {
