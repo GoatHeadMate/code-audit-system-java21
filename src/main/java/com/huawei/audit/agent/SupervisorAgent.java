@@ -53,6 +53,7 @@ public class SupervisorAgent {
     private final ClaudeGateway gateway;
     private final ObjectMapper objectMapper;
     private final FindingParser findingParser;
+    private final FindingConsolidator findingConsolidator;
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
     private final AuditMemoryService auditMemory;
@@ -62,6 +63,7 @@ public class SupervisorAgent {
             ClaudeGateway gateway,
             ObjectMapper objectMapper,
             FindingParser findingParser,
+            FindingConsolidator findingConsolidator,
             OrchestratorProperties properties,
             JobLogBroker logs,
             AuditMemoryService auditMemory
@@ -69,6 +71,7 @@ public class SupervisorAgent {
         this.gateway = gateway;
         this.objectMapper = objectMapper;
         this.findingParser = findingParser;
+        this.findingConsolidator = findingConsolidator;
         this.properties = properties;
         this.logs = logs;
         this.auditMemory = auditMemory;
@@ -81,8 +84,20 @@ public class SupervisorAgent {
             OrchestratorProperties properties,
             JobLogBroker logs
     ) {
-        this(gateway, objectMapper, findingParser, properties, logs,
+        this(gateway, objectMapper, findingParser, new FindingConsolidator(), properties, logs,
                 AuditMemoryService.NOOP);
+    }
+
+    public SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory
+    ) {
+        this(gateway, objectMapper, findingParser, new FindingConsolidator(), properties, logs,
+                auditMemory);
     }
 
     public SupervisorResult run(
@@ -196,10 +211,18 @@ public class SupervisorAgent {
                             + String.join("; ", failures)
             );
         }
+        List<Map<String, Object>> consolidated = findingConsolidator.consolidate(findings);
+        if (consolidated.size() != findings.size()) {
+            rationaleParts.add("finding consolidation: "
+                    + findings.size() + " raw findings -> "
+                    + consolidated.size() + " merged findings");
+            logs.publish(job, "[supervisor-agent] consolidated findings: raw="
+                    + findings.size() + ", merged=" + consolidated.size());
+        }
         return new SupervisorEnvelope(
                 List.copyOf(selectedHunters),
                 String.join(" | ", rationaleParts),
-                findings
+                consolidated
         );
     }
 

@@ -686,6 +686,72 @@ class SupervisorAgentTest {
         assertThat(result.selectedHunters()).containsExactly("http_output_batch_2");
     }
 
+    @Test
+    void consolidatesDuplicateFindingsFromParallelHunters()
+            throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
+                    String hunter = agents.keySet().iterator().next();
+                    return """
+                            {
+                              "selected_hunters":["%s"],
+                              "rationale":"duplicate surface",
+                              "findings":[{
+                                "rule_id":"cmdinj-%s",
+                                "title":"Runtime exec",
+                                "severity":"CRITICAL",
+                                "confidence":"HIGH",
+                                "vuln_type":"COMMAND_INJECTION",
+                                "file_path":"src/main/java/demo/Rce.java",
+                                "http_path":"/rce/runtime/exec",
+                                "verdict":"CONFIRM"
+                              }]
+                            }
+                            """.formatted(hunter, hunter);
+                });
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(
+                        true,
+                        10,
+                        5,
+                        80
+                ),
+                new JobLogBroker()
+        );
+        AuditJob job = new AuditJob("dedup123", "java");
+        job.workDir(tempDir.resolve("audit_dedup123"));
+        Files.createDirectories(job.workDir());
+
+        var result = supervisor.run(
+                job,
+                Path.of("source"),
+                Map.of(),
+                List.of("code_execution", "code_execution_team_general_endpoint_review"),
+                Map.of(
+                        "code_execution", taskFile("code_execution", 1).toString(),
+                        "code_execution_team_general_endpoint_review",
+                        taskFile("code_execution_team_general_endpoint_review", 1).toString()
+                ),
+                Map.of(),
+                Map.of()
+        );
+
+        assertThat(result.findings()).singleElement().satisfies(finding -> {
+            assertThat(finding)
+                    .containsEntry("vuln_type", "COMMAND_INJECTION")
+                    .containsEntry("http_path", "/rce/runtime/exec")
+                    .containsEntry("merged_count", 2);
+            assertThat((List<?>) finding.get("merged_from")).hasSize(2);
+        });
+        assertThat(result.rationale()).contains("finding consolidation");
+    }
+
     private Path taskFile(String hunter, int candidateCount) throws Exception {
         Path tasks = tempDir.resolve("tasks");
         Files.createDirectories(tasks);
