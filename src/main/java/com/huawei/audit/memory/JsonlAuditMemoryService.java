@@ -855,8 +855,6 @@ public class JsonlAuditMemoryService implements AuditMemoryService {
         writeApprovedRules(output);
     }
 
-    // 阈值自动 gate：高置信候选自动批准；auto-gate 批准后若出现误报证据则自动撤销。
-    // 批准后的规则仍只作先验、要求源码复验；人工决策优先于 auto-gate。
     private void autoGateIfQualified(Map<String, Object> candidate) throws Exception {
         if (qualifiesAutoReject(candidate)) {
             appendAutoDecision(candidate, "REJECTED",

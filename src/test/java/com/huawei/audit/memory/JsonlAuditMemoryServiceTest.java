@@ -300,7 +300,7 @@ class JsonlAuditMemoryServiceTest {
                 .contains("\"support_count\":2")
                 .contains("\"total_evidence_count\":2")
                 .contains("\"confirm_count\":1")
-                .contains("requires human approval");
+                .contains("automatic or human gate");
     }
 
     @Test
@@ -408,8 +408,10 @@ class JsonlAuditMemoryServiceTest {
         Map<String, Object> rule = ssrfCandidate(memory);
         assertThat(rule)
                 .containsEntry("status", "APPROVED")
-                .containsEntry("auto_approved", true);
+                .containsEntry("decision_reviewer", "auto-gate");
         assertThat(rule.get("decision_reviewer")).isEqualTo("auto-gate");
+        assertThat(rule.get("decision_rationale").toString())
+                .contains("auto-approved");
     }
 
     @Test
@@ -419,7 +421,6 @@ class JsonlAuditMemoryServiceTest {
         feedbackConfirms(memory, List.of("ag-j1", "ag-j2", "ag-j3"));
         memory.rememberFeedback(new AuditJob("ag-fp1", "java"), 0,
                 ssrfFinding(), "FALSE_POSITIVE", "", "x");
-        // 单次误报 < 阈值，不撤销自动批准
         assertThat(ssrfCandidate(memory)).containsEntry("status", "APPROVED");
     }
 
@@ -432,10 +433,11 @@ class JsonlAuditMemoryServiceTest {
                 ssrfFinding(), "FALSE_POSITIVE", "", "x");
         memory.rememberFeedback(new AuditJob("ag-fp2", "java"), 0,
                 ssrfFinding(), "FALSE_POSITIVE", "", "x");
-        // 误报达到阈值，撤销自动批准
         assertThat(ssrfCandidate(memory))
                 .containsEntry("status", "REJECTED")
-                .containsEntry("auto_rejected", true);
+                .containsEntry("decision_reviewer", "auto-gate");
+        assertThat(ssrfCandidate(memory).get("decision_rationale").toString())
+                .contains("auto-rejected");
     }
 
     @Test
@@ -450,7 +452,6 @@ class JsonlAuditMemoryServiceTest {
                 ssrfFinding(), "FALSE_POSITIVE", "", "x");
         memory.rememberFeedback(new AuditJob("hm-fp2", "java"), 0,
                 ssrfFinding(), "FALSE_POSITIVE", "", "x");
-        // 人工批准的规则不被 auto-gate 撤销
         assertThat(ssrfCandidate(memory)).containsEntry("status", "APPROVED");
     }
 
