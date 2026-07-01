@@ -188,6 +188,7 @@ public class AgentScopeGateway implements ClaudeGateway {
                         .addRoot(workspace))
                 .maxIters(properties.maxIters())
                 .subagents(subagents)
+                .enableAgentTracingLog(false)
                 .disableShellTool()
                 .disableSessionPersistence();
     }
