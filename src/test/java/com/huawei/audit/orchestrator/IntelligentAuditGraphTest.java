@@ -12,7 +12,9 @@ import com.huawei.audit.agent.EvidencePreparationService;
 import com.huawei.audit.agent.FindingConsolidator;
 import com.huawei.audit.agent.SubagentDefinitionService;
 import com.huawei.audit.agent.SupervisorAgent;
+import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
+import com.huawei.audit.domain.JobStatus;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.memory.AuditMemoryService;
 import java.nio.file.Files;
@@ -262,6 +264,7 @@ class IntelligentAuditGraphTest {
 
         assertThat(job.ceilingHit()).isTrue();
         assertThat(job.continuationComplete()).isTrue();
+        assertThat(job.status()).isEqualTo(JobStatus.PARTIAL);
         assertThat(result.taskSummary()).containsEntry("ceiling_hit", true);
         assertThat(job.roundsCompleted()).isEqualTo(5);
     }
@@ -343,7 +346,8 @@ class IntelligentAuditGraphTest {
                 new AttackChainCorrelator(),
                 memory,
                 new JobLogBroker(),
-                new ObjectMapper()
+                new ObjectMapper(),
+                new OrchestratorProperties(true, 10, 5, 80)
         );
     }
 

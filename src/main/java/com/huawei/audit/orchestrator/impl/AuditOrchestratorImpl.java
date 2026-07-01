@@ -162,10 +162,9 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
                 objectMapper.writerWithDefaultPrettyPrinter()
                         .writeValueAsString(result.finalFindings())
         );
-        // Defensive final assertion of terminal state: IntelligentAuditGraph's
-        // round loop already set DONE via job.mergeRoundOutcome() once the
-        // candidate pool was drained or the round/time ceiling was hit.
-        job.setStatus(JobStatus.DONE);
+        if (job.status() != JobStatus.PARTIAL) {
+            job.setStatus(JobStatus.DONE);
+        }
         logs.publish(
                 job,
                 "audit completed: " + result.finalFindings().size()

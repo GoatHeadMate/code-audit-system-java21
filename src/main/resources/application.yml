@@ -32,3 +32,9 @@ audit:
     max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}
     max-additional-hunters: ${MAX_ADDITIONAL_HUNTERS:5}
     max-chunks-per-batch: ${MAX_CHUNKS_PER_BATCH:80}
+    max-hunter-sessions-per-round: ${MAX_HUNTER_SESSIONS_PER_ROUND:24}
+    max-rounds: ${MAX_AUDIT_ROUNDS:5}
+    max-total-job-duration: ${MAX_TOTAL_AUDIT_DURATION:6h}
+    max-parallel-hunter-sessions: ${MAX_PARALLEL_HUNTER_SESSIONS:2}
+    hunter-session-timeout: ${HUNTER_SESSION_TIMEOUT:12m}
+    model-slot-timeout: ${MODEL_SLOT_TIMEOUT:2m}

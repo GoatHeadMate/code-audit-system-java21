@@ -53,13 +53,6 @@ public class SupervisorAgent {
             "component_candidates",
             "vulnerable_dependencies"
     );
-    private static final int MAX_PARALLEL_HUNTER_SESSIONS = 2;
-    private static final int MAX_HUNTER_SESSIONS_PER_JOB = 24;
-    private static final Duration DEFAULT_HUNTER_SESSION_TIMEOUT =
-            Duration.ofMinutes(12);
-    private static final Duration DEFAULT_MODEL_SLOT_TIMEOUT =
-            Duration.ofMinutes(2);
-
     private final ClaudeGateway gateway;
     private final ObjectMapper objectMapper;
     private final FindingParser findingParser;
@@ -68,6 +61,8 @@ public class SupervisorAgent {
     private final AuditMemoryService auditMemory;
     private final Duration hunterSessionTimeout;
     private final Duration modelSlotTimeout;
+    private final int maxParallelHunterSessions;
+    private final int maxHunterSessionsPerRound;
 
     @org.springframework.beans.factory.annotation.Autowired
     public SupervisorAgent(
@@ -79,7 +74,7 @@ public class SupervisorAgent {
             AuditMemoryService auditMemory
     ) {
         this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
-                DEFAULT_HUNTER_SESSION_TIMEOUT, DEFAULT_MODEL_SLOT_TIMEOUT);
+                properties.hunterSessionTimeout(), properties.modelSlotTimeout());
     }
 
     SupervisorAgent(
@@ -99,9 +94,11 @@ public class SupervisorAgent {
         this.logs = logs;
         this.auditMemory = auditMemory;
         this.hunterSessionTimeout = positiveOrDefault(
-                hunterSessionTimeout, DEFAULT_HUNTER_SESSION_TIMEOUT);
+                hunterSessionTimeout, properties.hunterSessionTimeout());
         this.modelSlotTimeout = positiveOrDefault(
-                modelSlotTimeout, DEFAULT_MODEL_SLOT_TIMEOUT);
+                modelSlotTimeout, properties.modelSlotTimeout());
+        this.maxParallelHunterSessions = properties.maxParallelHunterSessions();
+        this.maxHunterSessionsPerRound = properties.maxHunterSessionsPerRound();
     }
 
     public SupervisorAgent(
@@ -200,7 +197,7 @@ public class SupervisorAgent {
         List<String> rationaleParts = new ArrayList<>();
         List<Map<String, Object>> findings = new ArrayList<>();
         List<SessionFuture> futures = new ArrayList<>();
-        Semaphore sessionSlots = new Semaphore(MAX_PARALLEL_HUNTER_SESSIONS);
+        Semaphore sessionSlots = new Semaphore(maxParallelHunterSessions);
 
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -248,14 +245,14 @@ public class SupervisorAgent {
     }
 
     /**
-     * Only "never actually got to run because no model slot freed up in time"
-     * is retryable. A session that ran the full timeout, crashed, or returned
-     * an unparseable response is terminal — retrying it is expected to
-     * reproduce the same outcome.
+     * Slot-wait timeouts never reached the model, and session timeouts may
+     * complete under a larger follow-up budget. Parse/framework failures stay
+     * terminal because repeating the same prompt is likely to reproduce them.
      */
     private static boolean isRetryableFailure(String failureMessage) {
         return failureMessage != null
                 && (failureMessage.startsWith("timed out waiting for model slot")
+                        || failureMessage.startsWith("timed out after ")
                         || failureMessage.equals("interrupted while waiting for model slot"));
     }
 
@@ -290,9 +287,9 @@ public class SupervisorAgent {
             startedAtText = Instant.now().toString();
             logs.publish(
                     job,
-                    "[supervisor-agent] hunter " + hunter
-                            + " acquired model slot (max_parallel="
-                            + MAX_PARALLEL_HUNTER_SESSIONS + ")"
+                            "[supervisor-agent] hunter " + hunter
+                                    + " acquired model slot (max_parallel="
+                            + maxParallelHunterSessions + ")"
             );
             String response = gateway.supervise(
                     job.workDir(),
@@ -524,7 +521,7 @@ public class SupervisorAgent {
      * category first (all batches, not one representative — the supervisor
      * prompt's own invariant is that all batches of a category are jointly
      * mandatory), then fills remaining slots by global priority score, capped
-     * at MAX_HUNTER_SESSIONS_PER_JOB. With only one category present this
+     * at the configured per-round cap. With only one category present this
      * degrades to a plain priority sort, identical to the pre-existing
      * behavior.
      */
@@ -548,16 +545,17 @@ public class SupervisorAgent {
                             .reversed()
                             .thenComparing(AgentBuild::hunter))
                     .toList();
-            if (reserved.size() < MAX_HUNTER_SESSIONS_PER_JOB
-                    && reserved.size() + batchesForCategory.size() > MAX_HUNTER_SESSIONS_PER_JOB) {
+            if (reserved.size() < maxHunterSessionsPerRound
+                    && reserved.size() + batchesForCategory.size()
+                            > maxHunterSessionsPerRound) {
                 logs.publish(job, "[supervisor-agent] mandatory category "
                         + mandatoryBase + " alone has " + batchesForCategory.size()
                         + " batches, exceeding the per-round cap of "
-                        + MAX_HUNTER_SESSIONS_PER_JOB
+                        + maxHunterSessionsPerRound
                         + "; remaining batches and other categories deferred to a later round");
             }
             for (AgentBuild build : batchesForCategory) {
-                if (reserved.size() >= MAX_HUNTER_SESSIONS_PER_JOB) {
+                if (reserved.size() >= maxHunterSessionsPerRound) {
                     break;
                 }
                 reserved.add(build);
@@ -576,7 +574,7 @@ public class SupervisorAgent {
 
         List<AgentBuild> selected = new ArrayList<>(reserved);
         for (AgentBuild build : remaining) {
-            if (selected.size() >= MAX_HUNTER_SESSIONS_PER_JOB) {
+            if (selected.size() >= maxHunterSessionsPerRound) {
                 break;
             }
             selected.add(build);

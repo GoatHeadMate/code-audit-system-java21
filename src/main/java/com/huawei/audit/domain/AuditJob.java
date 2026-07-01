@@ -158,7 +158,7 @@ public final class AuditJob {
         this.failedHunters = Set.copyOf(retryableFailedThisRound);
         this.continuationComplete = !moreRoundsRemain;
         this.ceilingHit = ceilingHitNow;
-        setStatus(moreRoundsRemain ? JobStatus.PARTIAL : JobStatus.DONE);
+        setStatus(moreRoundsRemain || ceilingHitNow ? JobStatus.PARTIAL : JobStatus.DONE);
     }
 
     /**

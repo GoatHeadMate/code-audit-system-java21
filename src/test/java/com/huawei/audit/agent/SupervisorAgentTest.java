@@ -1009,14 +1009,14 @@ class SupervisorAgentTest {
                 Set.of()
         );
 
-        assertThat(result.timedOut()).containsExactly("ssrf");
+        assertThat(result.timedOut()).isEmpty();
         assertThat(result.reviewed()).isEmpty();
-        assertThat(result.retryableFailures()).isEmpty();
+        assertThat(result.retryableFailures()).containsExactly("ssrf");
         assertThat(result.rationale()).contains("timed out after");
     }
 
     @Test
-    void hunterSessionTimeoutIsTerminalNotRetryable() throws Exception {
+    void hunterSessionTimeoutIsRetryableAcrossResume() throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
         when(gateway.supervise(any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
@@ -1024,7 +1024,10 @@ class SupervisorAgentTest {
                     return """
                             {"selected_hunters":["ssrf"],"rationale":"late","findings":[]}
                             """;
-                });
+                })
+                .thenReturn("""
+                        {"selected_hunters":["ssrf"],"rationale":"resumed","findings":[]}
+                        """);
         ObjectMapper objectMapper = new ObjectMapper();
         SupervisorAgent supervisor = new SupervisorAgent(
                 gateway,
@@ -1045,18 +1048,16 @@ class SupervisorAgentTest {
                 job, Path.of("source"), Map.of(), List.of("ssrf"),
                 manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of()
         );
-        assertThat(firstRound.timedOut()).containsExactly("ssrf");
+        assertThat(firstRound.timedOut()).isEmpty();
+        assertThat(firstRound.retryableFailures()).containsExactly("ssrf");
 
-        // The orchestrator would pass this hunter back as alreadyTimedOut on
-        // the next round; it must be excluded, never re-attempted.
         var secondRound = supervisor.runRound(
                 job, Path.of("source"), Map.of(), List.of("ssrf"),
-                manifest, Map.of(), Map.of(), Set.of(), Set.of("ssrf"), Set.of()
+                manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of("ssrf")
         );
-        assertThat(secondRound.reviewed()).isEmpty();
+        assertThat(secondRound.reviewed()).containsExactly("ssrf");
         assertThat(secondRound.timedOut()).isEmpty();
         assertThat(secondRound.retryableFailures()).isEmpty();
-        assertThat(secondRound.findings()).isEmpty();
     }
 
     private Path taskFile(String hunter, int candidateCount) throws Exception {

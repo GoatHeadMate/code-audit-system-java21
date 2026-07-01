@@ -5,6 +5,7 @@ import com.huawei.audit.agent.EvidencePreparationService;
 import com.huawei.audit.agent.FindingConsolidator;
 import com.huawei.audit.agent.SubagentDefinitionService;
 import com.huawei.audit.agent.SupervisorAgent;
+import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.memory.AuditMemoryService;
@@ -23,9 +24,6 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class IntelligentAuditGraph {
-    private static final int MAX_ROUNDS = 5;
-    private static final Duration MAX_TOTAL_JOB_DURATION = Duration.ofHours(6);
-
     private final EvidencePreparationService evidencePreparation;
     private final SubagentDefinitionService subagentDefinitions;
     private final SupervisorAgent supervisor;
@@ -35,6 +33,7 @@ public class IntelligentAuditGraph {
     private final AuditMemoryService auditMemory;
     private final JobLogBroker logs;
     private final ObjectMapper objectMapper;
+    private final OrchestratorProperties properties;
 
     public IntelligentAuditGraph(
             EvidencePreparationService evidencePreparation,
@@ -45,7 +44,8 @@ public class IntelligentAuditGraph {
             AttackChainCorrelator chainCorrelator,
             AuditMemoryService auditMemory,
             JobLogBroker logs,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            OrchestratorProperties properties
     ) {
         this.evidencePreparation = evidencePreparation;
         this.subagentDefinitions = subagentDefinitions;
@@ -56,6 +56,7 @@ public class IntelligentAuditGraph {
         this.auditMemory = auditMemory;
         this.logs = logs;
         this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
     public AuditResult invoke(
@@ -140,7 +141,7 @@ public class IntelligentAuditGraph {
             int startingRound
     ) throws Exception {
         int round = startingRound;
-        Instant jobDeadline = Instant.now().plus(MAX_TOTAL_JOB_DURATION);
+        Instant jobDeadline = Instant.now().plus(properties.maxTotalJobDuration());
         List<Map<String, Object>> finalFindings = List.of();
         List<Map<String, Object>> deduped = List.of();
         List<Map<String, Object>> chains = List.of();
@@ -173,7 +174,7 @@ public class IntelligentAuditGraph {
             int attemptedDoneCount = reviewed.size() + timedOut.size();
             boolean fullyDrained = attemptedDoneCount >= preparation.expandedCandidates().size();
             ceilingReached = !fullyDrained
-                    && (round >= MAX_ROUNDS || Instant.now().isAfter(jobDeadline));
+                    && (round >= properties.maxRounds() || Instant.now().isAfter(jobDeadline));
             boolean moreRoundsRemain = !fullyDrained && !ceilingReached;
 
             job.mergeRoundOutcome(

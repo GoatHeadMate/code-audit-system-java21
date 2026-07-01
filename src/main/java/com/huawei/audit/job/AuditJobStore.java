@@ -172,26 +172,37 @@ public class AuditJobStore {
         if ((status == JobStatus.PARTIAL || status == JobStatus.DONE)
                 && hasProgress && projectStillPresent) {
             JsonNode progress = objectMapper.readTree(progressFile.toFile());
+            Set<String> reviewed = toStringSet(progress.path("reviewed"));
+            Set<String> timedOut = toStringSet(progress.path("timed_out"));
+            Set<String> retryable = toStringSet(progress.path("failed_retryable"));
+            boolean complete = progress.path("complete").asBoolean(status != JobStatus.PARTIAL);
+            boolean ceilingHit = progress.path("ceiling_hit").asBoolean(false);
             job.restoreProgress(
                     progress.path("round").asInt(0),
-                    toStringSet(progress.path("reviewed")),
-                    toStringSet(progress.path("timed_out")),
-                    toStringSet(progress.path("failed_retryable")),
-                    progress.path("complete").asBoolean(status != JobStatus.PARTIAL),
-                    progress.path("ceiling_hit").asBoolean(false)
+                    reviewed,
+                    timedOut,
+                    retryable,
+                    complete,
+                    ceilingHit
             );
-            job.totalCandidateCount(progress.path("total_candidates").asInt(0));
+            int totalCandidates = progress.path("total_candidates").asInt(0);
+            job.totalCandidateCount(totalCandidates);
             if (meta != null) {
                 job.restoreSelectedInterfaceIds(toStringSet(meta.path("selected_interface_ids")));
                 job.cacheKey(meta.path("cache_key").asText(""));
             }
             job.projectPath(resolveSourceRoot(projectDir));
+            if (ceilingHit && remainingCount(totalCandidates, reviewed, timedOut) > 0) {
+                status = JobStatus.PARTIAL;
+            }
         }
 
         if (status == JobStatus.PARTIAL) {
             job.setStatus(JobStatus.PARTIAL);
             jobs.put(jobId, job);
-            pendingResume.add(job);
+            if (!job.continuationComplete()) {
+                pendingResume.add(job);
+            }
             return;
         }
 
@@ -210,6 +221,14 @@ public class AuditJobStore {
             arrayNode.forEach(node -> values.add(node.asText()));
         }
         return values;
+    }
+
+    private int remainingCount(
+            int totalCandidates,
+            Set<String> reviewed,
+            Set<String> timedOut
+    ) {
+        return Math.max(0, totalCandidates - reviewed.size() - timedOut.size());
     }
 
     private Path resolveSourceRoot(Path projectDir) throws IOException {
