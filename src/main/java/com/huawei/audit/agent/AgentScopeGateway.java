@@ -9,6 +9,7 @@ import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.harness.agent.HarnessAgent;
+import io.agentscope.harness.agent.filesystem.spec.LocalFilesystemSpec;
 import io.agentscope.harness.agent.subagent.SubagentDeclaration;
 import io.agentscope.harness.agent.subagent.WorkspaceMode;
 import java.nio.file.Path;
@@ -39,7 +40,7 @@ public class AgentScopeGateway implements ClaudeGateway {
 
     @Override
     public String query(Path workingDirectory, String prompt, Duration timeout) {
-        try (HarnessAgent agent = baseBuilder(workingDirectory, List.of())
+        try (HarnessAgent agent = baseBuilder(workingDirectory, workingDirectory, List.of())
                 .name("audit-query-agent")
                 .description("One-shot audit helper")
                 .sysPrompt("Answer the audit question directly and return only the requested text.")
@@ -67,7 +68,7 @@ public class AgentScopeGateway implements ClaudeGateway {
         for (int attempt = 1; ; attempt++) {
             try {
                 String result = doSupervise(
-                        workingDirectory, prompt, agents, eventConsumer
+                        workingDirectory, sourceRoot, prompt, agents, eventConsumer
                 );
                 if (isOverloadedResponse(result) && attempt <= MAX_RETRIES) {
                     retryWait(attempt, eventConsumer);
@@ -87,6 +88,7 @@ public class AgentScopeGateway implements ClaudeGateway {
 
     private String doSupervise(
             Path workingDirectory,
+            Path sourceRoot,
             String prompt,
             Map<String, AgentDef> agents,
             Consumer<String> eventConsumer
@@ -96,7 +98,7 @@ public class AgentScopeGateway implements ClaudeGateway {
                 eventConsumer
         );
 
-        try (HarnessAgent agent = baseBuilder(workingDirectory, declarations)
+        try (HarnessAgent agent = baseBuilder(workingDirectory, sourceRoot, declarations)
                 .name("audit-supervisor")
                 .description("White-box security audit supervisor")
                 .sysPrompt("You are a white-box security audit supervisor. Follow the user prompt exactly.")
@@ -171,11 +173,19 @@ public class AgentScopeGateway implements ClaudeGateway {
 
     private HarnessAgent.Builder baseBuilder(
             Path workingDirectory,
+            Path projectRoot,
             List<SubagentDeclaration> subagents
     ) {
+        Path workspace = workingDirectory.toAbsolutePath().normalize();
+        Path project = (projectRoot == null ? workingDirectory : projectRoot)
+                .toAbsolutePath()
+                .normalize();
         return HarnessAgent.builder()
                 .model(model())
-                .workspace(workingDirectory.toAbsolutePath().normalize())
+                .workspace(workspace)
+                .filesystem(new LocalFilesystemSpec()
+                        .project(project)
+                        .addRoot(workspace))
                 .maxIters(properties.maxIters())
                 .subagents(subagents)
                 .disableShellTool()
@@ -236,10 +246,16 @@ public class AgentScopeGateway implements ClaudeGateway {
                     SubagentDeclaration.Builder builder = SubagentDeclaration.builder()
                             .name(entry.getKey())
                             .description(entry.getValue().description())
-                            .inlineAgentsBody(entry.getValue().prompt())
-                            .workspaceMode(WorkspaceMode.SHARED)
                             .steps(effectiveSteps(entry.getValue()))
                             .mode(SubagentDeclaration.Mode.SUBAGENT);
+                    Path definitionWorkspace = entry.getValue().workspace();
+                    if (definitionWorkspace != null) {
+                        builder.workspace(definitionWorkspace.toAbsolutePath().normalize())
+                                .workspaceMode(WorkspaceMode.ISOLATED);
+                    } else {
+                        builder.inlineAgentsBody(entry.getValue().prompt())
+                                .workspaceMode(WorkspaceMode.SHARED);
+                    }
                     List<String> tools = entry.getValue().tools();
                     if (tools != null && !tools.isEmpty()) {
                         builder.tools(tools);

@@ -300,6 +300,23 @@ class SupervisorAgentTest {
                 "grep_files",
                 "load_skill_through_path"
         );
+        assertThat(agent.workspace()).isNotNull();
+        assertThat(agent.workspace().resolve("AGENTS.md")).isRegularFile();
+        assertThat(agent.workspace()
+                .resolve("skills")
+                .resolve("audit-sql-injection")
+                .resolve("SKILL.md"))
+                .isRegularFile()
+                .hasContent("""
+                        ---
+                        name: audit-sql-injection
+                        description: SQL rules
+                        ---
+
+                        # SQL 注入判断知识
+
+                        Confirm only with source-level SQL construction evidence.
+                        """);
         assertThat(agent.prompt())
                 .contains("load_skill_through_path(skillId=\"audit-sql-injection\", path=\"SKILL.md\")")
                 .contains("tasks/sql.json")

@@ -10,6 +10,7 @@ import com.huawei.audit.memory.AuditMemoryService;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -469,10 +470,13 @@ public class SupervisorAgent {
                     taskPath,
                     sourceRootStr
             );
+            Path definitionWorkspace = materializeDefinitionWorkspace(
+                    workDirectory, hunter, skillName, agentPrompt);
             builds.add(new AgentBuild(hunter, new ClaudeGateway.AgentDef(
                     "Audit " + hunter.replace('_', ' ')
                             + " vulnerabilities in the target project",
                     agentPrompt,
+                    definitionWorkspace,
                     readOnlyTools,
                     null,
                     intValue(decision, "recommended_steps"),
@@ -481,6 +485,38 @@ public class SupervisorAgent {
             )));
         }
         return builds;
+    }
+
+    private Path materializeDefinitionWorkspace(
+            Path workDirectory,
+            String hunter,
+            String skillName,
+            String agentPrompt
+    ) throws IOException {
+        Path definitionDir = workDirectory
+                .resolve("agent-definitions")
+                .resolve(safeFileName(hunter));
+        Files.createDirectories(definitionDir);
+        Files.writeString(definitionDir.resolve("AGENTS.md"), agentPrompt);
+
+        if (skillName != null && !skillName.isBlank()) {
+            Path sourceSkill = workDirectory
+                    .resolve("skills")
+                    .resolve(skillName)
+                    .resolve("SKILL.md");
+            if (Files.isRegularFile(sourceSkill)) {
+                Path targetSkillDir = definitionDir
+                        .resolve("skills")
+                        .resolve(skillName);
+                Files.createDirectories(targetSkillDir);
+                Files.copy(
+                        sourceSkill,
+                        targetSkillDir.resolve("SKILL.md"),
+                        StandardCopyOption.REPLACE_EXISTING
+                );
+            }
+        }
+        return definitionDir;
     }
 
     /**

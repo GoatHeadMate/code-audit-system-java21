@@ -22,6 +22,7 @@ public interface ClaudeGateway {
     record AgentDef(
             String description,
             String prompt,
+            Path workspace,
             List<String> tools,
             String model,
             Integer steps,
@@ -34,7 +35,7 @@ public interface ClaudeGateway {
                 List<String> tools,
                 String model
         ) {
-            this(description, prompt, tools, model, null, 0, "");
+            this(description, prompt, null, tools, model, null, 0, "");
         }
     }
 }
