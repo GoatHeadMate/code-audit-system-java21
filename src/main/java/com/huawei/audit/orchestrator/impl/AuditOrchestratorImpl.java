@@ -77,6 +77,13 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
 
             SourceWorkspaceService.PreparedSource source = sources.prepare(job);
             job.setStatus(JobStatus.RUNNING);
+            // Persist job-meta.json as soon as cacheKey/projectPath are known,
+            // not only at the end: if the process dies mid-round (before this
+            // job ever reaches finish()/the catch block), a restart must still
+            // be able to restore cacheKey/selectedInterfaceIds correctly —
+            // otherwise the analysis cache key comes back empty and every
+            // resume re-runs the full white-box analysis from scratch forever.
+            persistMeta(job);
             Map<String, Object> techProfile = techScanner.scan(source.sourceRoot());
             job.techProfile(techProfile);
             logs.publish(
@@ -111,6 +118,12 @@ public class AuditOrchestratorImpl implements AuditOrchestrator {
         try {
             SourceWorkspaceService.PreparedSource source = sources.prepare(job);
             job.setStatus(JobStatus.RUNNING);
+            // Refresh job-meta.json immediately: it may still say "done" from
+            // the completion that triggered this resume. If the process dies
+            // again before finish() runs, the next restart must see "running"
+            // (falls through to the PARTIAL/progress check) rather than a
+            // stale "done" that would short-circuit straight past it.
+            persistMeta(job);
             Map<String, Object> techProfile = techScanner.scan(source.sourceRoot());
             job.techProfile(techProfile);
             logs.publish(

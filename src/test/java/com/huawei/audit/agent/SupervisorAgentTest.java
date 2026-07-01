@@ -882,8 +882,15 @@ class SupervisorAgentTest {
                 new OrchestratorProperties(true, 10, 5, 80),
                 new JobLogBroker(),
                 AuditMemoryService.NOOP,
-                Duration.ofSeconds(5),
-                Duration.ofSeconds(1)
+                Duration.ofSeconds(10),
+                // This test asserts selection logic (which hunters get picked),
+                // not slot-wait timing — 24 near-instant mock calls still have
+                // to clear the semaphore 2-at-a-time, and under full-suite
+                // system load a 1s slot timeout was observed to flake even
+                // though the mock never blocks. A few seconds of headroom
+                // removes that scheduling-noise risk without weakening what
+                // the test actually verifies.
+                Duration.ofSeconds(5)
         );
         AuditJob job = new AuditJob("mandatory123", "java");
         job.workDir(tempDir.resolve("audit_mandatory123"));
