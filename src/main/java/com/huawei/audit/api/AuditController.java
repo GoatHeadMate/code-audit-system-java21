@@ -208,6 +208,49 @@ public class AuditController {
         ));
     }
 
+    @PostMapping("/audit/{jobId}/resume")
+    public ResponseEntity<SubmitResponse> resumeAudit(@PathVariable String jobId) {
+        AuditJob job = requireJob(jobId);
+        ApiDtos.ProgressInfo progress = ApiDtos.ProgressInfo.from(job);
+        if (job.status() == JobStatus.RUNNING
+                || job.status() == JobStatus.PENDING
+                || job.status() == JobStatus.CLONING) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "audit is already running"
+            );
+        }
+        if (job.status() == JobStatus.FAILED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "failed audit cannot be resumed"
+            );
+        }
+        if (!progress.ceilingHit() || progress.remainingCount() <= 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "audit has no ceiling-limited remaining work to resume"
+            );
+        }
+        if (job.workDir() == null || !Files.isDirectory(job.workDir())
+                || job.projectPath() == null || !Files.isDirectory(job.projectPath())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "source workspace is not available for resume"
+            );
+        }
+
+        job.logDone(false);
+        job.setStatus(JobStatus.RUNNING);
+        logs.publish(job, "[orchestrator] user requested audit continuation");
+        orchestrator.resume(job);
+        return ResponseEntity.accepted().body(new SubmitResponse(
+                job.jobId(),
+                job.status().value(),
+                "audit continuation submitted"
+        ));
+    }
+
     @GetMapping("/audit")
     public JobListResponse list() {
         return new JobListResponse(

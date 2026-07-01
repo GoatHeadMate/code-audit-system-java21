@@ -169,13 +169,16 @@ public class AuditJobStore {
             }
         }
 
-        if (status == JobStatus.PARTIAL) {
+        if ((status == JobStatus.PARTIAL || status == JobStatus.DONE)
+                && hasProgress && projectStillPresent) {
             JsonNode progress = objectMapper.readTree(progressFile.toFile());
             job.restoreProgress(
                     progress.path("round").asInt(0),
                     toStringSet(progress.path("reviewed")),
                     toStringSet(progress.path("timed_out")),
-                    toStringSet(progress.path("failed_retryable"))
+                    toStringSet(progress.path("failed_retryable")),
+                    progress.path("complete").asBoolean(status != JobStatus.PARTIAL),
+                    progress.path("ceiling_hit").asBoolean(false)
             );
             job.totalCandidateCount(progress.path("total_candidates").asInt(0));
             if (meta != null) {
@@ -183,6 +186,9 @@ public class AuditJobStore {
                 job.cacheKey(meta.path("cache_key").asText(""));
             }
             job.projectPath(resolveSourceRoot(projectDir));
+        }
+
+        if (status == JobStatus.PARTIAL) {
             job.setStatus(JobStatus.PARTIAL);
             jobs.put(jobId, job);
             pendingResume.add(job);

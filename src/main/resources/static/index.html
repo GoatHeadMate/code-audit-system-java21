@@ -241,7 +241,7 @@
             <span id="dBadge"></span>
           </div>
           <div id="dSrc" class="text-xs text-slate-400 truncate"></div>
-          <div id="dCoverage" class="hidden text-xs text-amber-600 mt-0.5"></div>
+          <div id="dCoverage" class="hidden text-xs text-amber-600 mt-1"></div>
         </div>
         <div class="flex items-center gap-3 shrink-0">
           <span id="dCount" class="hidden text-xs px-2.5 py-1 rounded-full font-medium
@@ -724,17 +724,54 @@ function updateHeader(j) {
     const value = p?.[camel] ?? p?.[snake];
     return value ?? fallback;
   };
-  if (p && !p.complete) {
+  if (p && (!p.complete || ['running','pending','cloning'].includes(j.status))) {
     cov.textContent = `第${pv('round', 'round')}轮 · 已审查${pv('reviewedCount', 'reviewed_count')} · 超时${pv('timedOutCount', 'timed_out_count')} · 待处理${pv('remainingCount', 'remaining_count')} · 后台继续审计中`;
     cov.classList.remove('hidden');
   } else if (p && p.complete && pv('round', 'round') > 0) {
     const ceilingHit = p.ceilingHit ?? p.ceiling_hit;
-    cov.textContent = ceilingHit
-      ? `审计已达轮次/时长上限，可能未覆盖全部候选（已审查${pv('reviewedCount', 'reviewed_count')}/${pv('totalCandidates', 'total_candidates')}）`
-      : `审计完成`;
+    const remaining = pv('remainingCount', 'remaining_count');
+    if (ceilingHit && remaining > 0) {
+      cov.innerHTML = `
+        <span>审计已达轮次/时长上限，仍有 ${remaining} 个候选待处理（已审查${pv('reviewedCount', 'reviewed_count')}/${pv('totalCandidates', 'total_candidates')}）</span>
+        <button id="resumeAuditBtn" onclick="resumeAudit('${esc(j.job_id)}', this)"
+          class="ml-2 inline-flex items-center rounded border border-blue-200 px-2 py-0.5 text-[11px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">
+          继续审计
+        </button>
+        <span id="resumeAuditStatus" class="ml-2 text-xs text-slate-400"></span>`;
+    } else {
+      cov.textContent = ceilingHit
+        ? `审计已达轮次/时长上限，可能未覆盖全部候选（已审查${pv('reviewedCount', 'reviewed_count')}/${pv('totalCandidates', 'total_candidates')}）`
+        : `审计完成`;
+    }
     cov.classList.remove('hidden');
   } else {
     cov.classList.add('hidden');
+  }
+}
+
+async function resumeAudit(jobId, btn) {
+  const status = document.getElementById('resumeAuditStatus');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '启动中...';
+  }
+  if (status) status.textContent = '正在提交续跑请求';
+  try {
+    const r = await fetch(`/audit/${encodeURIComponent(jobId)}/resume`, { method:'POST' });
+    const res = await readJsonResponse(r);
+    if (!r.ok) throw new Error(res.detail || `续跑失败（HTTP ${r.status}）`);
+    if (status) status.textContent = '已提交，日志继续输出';
+    await loadJobs();
+    if (selId === jobId) {
+      stopES();
+      startES(jobId);
+    }
+  } catch (e) {
+    if (status) status.textContent = e.message;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '继续审计';
+    }
   }
 }
 

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import com.huawei.audit.agent.ClaudeGateway;
 import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
+import com.huawei.audit.domain.JobStatus;
 import com.huawei.audit.job.AuditJobStore;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.memory.AuditMemoryService;
@@ -21,6 +22,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockMultipartFile;
@@ -235,6 +237,87 @@ class AuditControllerTest {
                 org.mockito.Mockito.anyString(),
                 org.mockito.Mockito.anyString()
         );
+    }
+
+    @Test
+    void resumesCeilingLimitedAuditWithRemainingCandidates() throws Exception {
+        AuditJobStore jobs = mock(AuditJobStore.class);
+        SourceWorkspaceService sources = mock(SourceWorkspaceService.class);
+        InterfaceInventoryService inventory = mock(
+                InterfaceInventoryService.class
+        );
+        AuditOrchestrator orchestrator = mock(AuditOrchestrator.class);
+        AuditJob job = new AuditJob("resume1", "java");
+        Path workDir = Files.createDirectories(tempDir.resolve("audit_resume1"));
+        Path project = Files.createDirectories(workDir.resolve("project"));
+        job.submitOnce(Set.of());
+        job.workDir(workDir);
+        job.projectPath(project);
+        job.totalCandidateCount(10);
+        job.restoreProgress(
+                5,
+                Set.of("code_execution", "ssrf"),
+                Set.of("authorization"),
+                Set.of(),
+                true,
+                true
+        );
+        job.setStatus(JobStatus.DONE);
+        job.logDone(true);
+
+        when(jobs.find(job.jobId())).thenReturn(Optional.of(job));
+
+        AuditController controller = controller(
+                jobs,
+                sources,
+                inventory,
+                orchestrator
+        );
+
+        var response = controller.resumeAudit(job.jobId());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(202);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().status()).isEqualTo("running");
+        assertThat(job.status()).isEqualTo(JobStatus.RUNNING);
+        assertThat(job.logDone()).isFalse();
+        verify(orchestrator).resume(job);
+    }
+
+    @Test
+    void rejectsResumeWhenAuditWasFullyCovered() {
+        AuditJobStore jobs = mock(AuditJobStore.class);
+        SourceWorkspaceService sources = mock(SourceWorkspaceService.class);
+        InterfaceInventoryService inventory = mock(
+                InterfaceInventoryService.class
+        );
+        AuditOrchestrator orchestrator = mock(AuditOrchestrator.class);
+        AuditJob job = new AuditJob("resume2", "java");
+        job.submitOnce(Set.of());
+        job.totalCandidateCount(2);
+        job.restoreProgress(
+                1,
+                Set.of("code_execution", "ssrf"),
+                Set.of(),
+                Set.of(),
+                true,
+                false
+        );
+        job.setStatus(JobStatus.DONE);
+
+        when(jobs.find(job.jobId())).thenReturn(Optional.of(job));
+
+        AuditController controller = controller(
+                jobs,
+                sources,
+                inventory,
+                orchestrator
+        );
+
+        assertThatThrownBy(() -> controller.resumeAudit(job.jobId()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("no ceiling-limited remaining work");
+        verify(orchestrator, org.mockito.Mockito.never()).resume(job);
     }
 
     private AuditController controller(

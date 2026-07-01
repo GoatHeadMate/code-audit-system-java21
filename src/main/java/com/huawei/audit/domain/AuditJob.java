@@ -170,12 +170,16 @@ public final class AuditJob {
             int roundsCompleted,
             Set<String> reviewedHunters,
             Set<String> timedOutHunters,
-            Set<String> failedHunters
+            Set<String> failedHunters,
+            boolean continuationComplete,
+            boolean ceilingHit
     ) {
         this.roundsCompleted = roundsCompleted;
         this.reviewedHunters = Set.copyOf(reviewedHunters);
         this.timedOutHunters = Set.copyOf(timedOutHunters);
         this.failedHunters = Set.copyOf(failedHunters);
+        this.continuationComplete = continuationComplete;
+        this.ceilingHit = ceilingHit;
     }
 
     private static Set<String> union(Set<String> existing, Set<String> additional) {
