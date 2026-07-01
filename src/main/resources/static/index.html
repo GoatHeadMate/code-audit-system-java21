@@ -720,12 +720,17 @@ function updateHeader(j) {
 
   const cov = document.getElementById('dCoverage');
   const p = j.progress;
+  const pv = (camel, snake, fallback = 0) => {
+    const value = p?.[camel] ?? p?.[snake];
+    return value ?? fallback;
+  };
   if (p && !p.complete) {
-    cov.textContent = `第${p.round}轮 · 已审查${p.reviewedCount} · 超时${p.timedOutCount} · 待处理${p.remainingCount} · 后台继续审计中`;
+    cov.textContent = `第${pv('round', 'round')}轮 · 已审查${pv('reviewedCount', 'reviewed_count')} · 超时${pv('timedOutCount', 'timed_out_count')} · 待处理${pv('remainingCount', 'remaining_count')} · 后台继续审计中`;
     cov.classList.remove('hidden');
-  } else if (p && p.complete && p.round > 0) {
-    cov.textContent = p.ceilingHit
-      ? `审计已达轮次/时长上限，可能未覆盖全部候选（已审查${p.reviewedCount}/${p.totalCandidates}）`
+  } else if (p && p.complete && pv('round', 'round') > 0) {
+    const ceilingHit = p.ceilingHit ?? p.ceiling_hit;
+    cov.textContent = ceilingHit
+      ? `审计已达轮次/时长上限，可能未覆盖全部候选（已审查${pv('reviewedCount', 'reviewed_count')}/${pv('totalCandidates', 'total_candidates')}）`
       : `审计完成`;
     cov.classList.remove('hidden');
   } else {
