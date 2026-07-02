@@ -22,6 +22,7 @@ audit:
     api-key: sk_
     base-url: https://open.bigmodel.cn/api/anthropic
     max-iters: ${AGENTSCOPE_MAX_ITERS:80}
+  resume-on-startup: ${AUDIT_RESUME_ON_STARTUP:false}
   max-concurrent-jobs: ${MAX_CONCURRENT_JOBS:2}
   # Limits concurrent evidence preparation tasks; AgentScope uses one Supervisor session.
   max-concurrent-hunters: ${MAX_CONCURRENT_HUNTERS:15}

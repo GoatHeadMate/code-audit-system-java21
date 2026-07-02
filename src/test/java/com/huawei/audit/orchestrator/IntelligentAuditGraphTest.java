@@ -2,6 +2,7 @@ package com.huawei.audit.orchestrator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -324,7 +325,7 @@ class IntelligentAuditGraphTest {
                 AuditMemoryService.NOOP);
         IntelligentAuditGraph.AuditResult result = graph.invokeResumed(
                 job, Path.of("source"), Map.of(), List.of("code_execution"),
-                Set.of(), Set.of(), Set.of());
+                Set.of(), Set.of("code_execution"), Set.of());
 
         assertThat(result.finalFindings()).singleElement().satisfies(f -> {
             assertThat(f).containsEntry("merged_count", 2);
@@ -337,6 +338,10 @@ class IntelligentAuditGraphTest {
         });
         assertThat(result.finalFindings().toString())
                 .doesNotContain("stale-should-not-be-reused");
+        verify(supervisor).runRound(
+                any(), any(), any(), any(), any(), any(), any(),
+                any(), eq(Set.of()), eq(Set.of())
+        );
     }
 
     private IntelligentAuditGraph newGraph(

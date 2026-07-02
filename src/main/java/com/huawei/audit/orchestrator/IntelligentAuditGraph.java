@@ -110,7 +110,7 @@ public class IntelligentAuditGraph {
         return runRoundLoop(
                 job, sourceRoot, techProfile, candidates, preparation, skillNames,
                 seedRaw, new LinkedHashSet<>(alreadyReviewed),
-                new LinkedHashSet<>(alreadyTimedOut), new LinkedHashSet<>(alreadyFailed),
+                new LinkedHashSet<>(), new LinkedHashSet<>(alreadyFailed),
                 job.roundsCompleted()
         );
     }

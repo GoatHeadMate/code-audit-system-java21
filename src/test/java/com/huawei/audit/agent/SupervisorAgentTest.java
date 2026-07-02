@@ -1114,6 +1114,43 @@ class SupervisorAgentTest {
         assertThat(secondRound.retryableFailures()).isEmpty();
     }
 
+    @Test
+    void legacyTimedOutHunterStaysEligibleForResume() throws Exception {
+        ClaudeGateway gateway = mock(ClaudeGateway.class);
+        when(gateway.supervise(any(), any(), any(), any(), any()))
+                .thenReturn("""
+                        {"selected_hunters":["authorization"],"rationale":"retried","findings":[]}
+                        """);
+        ObjectMapper objectMapper = new ObjectMapper();
+        SupervisorAgent supervisor = new SupervisorAgent(
+                gateway,
+                objectMapper,
+                new FindingParser(objectMapper),
+                new OrchestratorProperties(true, 10, 5, 80),
+                new JobLogBroker(),
+                AuditMemoryService.NOOP,
+                Duration.ofMillis(1),
+                Duration.ofMillis(50)
+        );
+        AuditJob job = new AuditJob("legacytimeout123", "java");
+        job.workDir(tempDir.resolve("audit_legacytimeout123"));
+        Files.createDirectories(job.workDir());
+        Map<String, String> manifest = Map.of(
+                "authorization",
+                taskFile("authorization", 1).toString()
+        );
+
+        var result = supervisor.runRound(
+                job, Path.of("source"), Map.of(), List.of("authorization"),
+                manifest, Map.of(), Map.of(),
+                Set.of(), Set.of("authorization"), Set.of()
+        );
+
+        assertThat(result.reviewed()).containsExactly("authorization");
+        assertThat(result.timedOut()).isEmpty();
+        assertThat(result.retryableFailures()).isEmpty();
+    }
+
     private Path taskFile(String hunter, int candidateCount) throws Exception {
         Path tasks = tempDir.resolve("tasks");
         Files.createDirectories(tasks);

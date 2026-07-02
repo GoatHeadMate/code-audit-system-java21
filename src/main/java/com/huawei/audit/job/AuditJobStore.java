@@ -173,7 +173,7 @@ public class AuditJobStore {
                 && hasProgress && projectStillPresent) {
             JsonNode progress = objectMapper.readTree(progressFile.toFile());
             Set<String> reviewed = toStringSet(progress.path("reviewed"));
-            Set<String> timedOut = toStringSet(progress.path("timed_out"));
+            Set<String> timedOut = Set.of();
             Set<String> retryable = toStringSet(progress.path("failed_retryable"));
             boolean complete = progress.path("complete").asBoolean(status != JobStatus.PARTIAL);
             boolean ceilingHit = progress.path("ceiling_hit").asBoolean(false);

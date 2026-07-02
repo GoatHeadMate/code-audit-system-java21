@@ -240,7 +240,7 @@ class AuditControllerTest {
     }
 
     @Test
-    void resumesCeilingLimitedAuditWithRemainingCandidates() throws Exception {
+    void resumesAuditWithRemainingCandidates() throws Exception {
         AuditJobStore jobs = mock(AuditJobStore.class);
         SourceWorkspaceService sources = mock(SourceWorkspaceService.class);
         InterfaceInventoryService inventory = mock(
@@ -316,7 +316,7 @@ class AuditControllerTest {
 
         assertThatThrownBy(() -> controller.resumeAudit(job.jobId()))
                 .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("no ceiling-limited remaining work");
+                .hasMessageContaining("no remaining work");
         verify(orchestrator, org.mockito.Mockito.never()).resume(job);
     }
 

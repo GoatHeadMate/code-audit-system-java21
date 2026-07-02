@@ -3,6 +3,7 @@ package com.huawei.audit.config;
 import java.nio.file.Path;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 @ConfigurationProperties(prefix = "audit")
 public record AuditProperties(
@@ -12,8 +13,10 @@ public record AuditProperties(
         Duration claudeSidecarTimeout,
         int maxConcurrentJobs,
         int maxConcurrentHunters,
-        Duration hunterTimeout
+        Duration hunterTimeout,
+        boolean resumeOnStartup
 ) {
+    @ConstructorBinding
     public AuditProperties {
         workspace = workspace == null ? Path.of("workspace") : workspace;
         claudeSidecarUrl = blankDefault(
@@ -29,6 +32,27 @@ public record AuditProperties(
         maxConcurrentJobs = clamp(maxConcurrentJobs, 1, 32, 2);
         maxConcurrentHunters = clamp(maxConcurrentHunters, 1, 15, 15);
         hunterTimeout = hunterTimeout == null ? Duration.ofMinutes(30) : hunterTimeout;
+    }
+
+    public AuditProperties(
+            Path workspace,
+            String claudeSidecarUrl,
+            String claudeSidecarToken,
+            Duration claudeSidecarTimeout,
+            int maxConcurrentJobs,
+            int maxConcurrentHunters,
+            Duration hunterTimeout
+    ) {
+        this(
+                workspace,
+                claudeSidecarUrl,
+                claudeSidecarToken,
+                claudeSidecarTimeout,
+                maxConcurrentJobs,
+                maxConcurrentHunters,
+                hunterTimeout,
+                false
+        );
     }
 
     public Path absoluteWorkspace() {

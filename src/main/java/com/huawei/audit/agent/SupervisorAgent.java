@@ -150,10 +150,6 @@ public class SupervisorAgent {
             Set<String> alreadyFailed
     ) throws Exception {
         Set<String> alreadyAttempted = new LinkedHashSet<>(alreadyReviewed);
-        alreadyAttempted.addAll(alreadyTimedOut);
-        // alreadyFailed (retryable model-slot-wait failures) is intentionally
-        // NOT excluded here — those hunters never actually ran and stay
-        // eligible for this and future rounds.
 
         List<AgentBuild> eligible = collectEligibleBuilds(
                 job.workDir(), sourceRoot, candidates, evidenceManifest,

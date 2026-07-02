@@ -142,6 +142,25 @@ class AuditJobStoreTest {
                 .containsExactly("ceiling1");
     }
 
+    @Test
+    void legacyTimedOutProgressRestoresAsPendingWork() throws Exception {
+        Path dir = jobDir("legacytimeout");
+        writeMeta(dir, "legacytimeout", "done", Set.of(), "");
+        writeFindings(dir, "[]");
+        writeProgress(dir, 1, 2, """
+                "reviewed":["ssrf"],"timed_out":["authorization"],"failed_retryable":[]
+                """, true, false);
+        Files.createDirectories(dir.resolve("project"));
+
+        AuditJobStore store = newStore();
+
+        AuditJob job = store.find("legacytimeout").orElseThrow();
+        assertThat(job.status()).isEqualTo(JobStatus.PARTIAL);
+        assertThat(job.reviewedHunters()).containsExactly("ssrf");
+        assertThat(job.timedOutHunters()).isEmpty();
+        assertThat(job.continuationComplete()).isFalse();
+    }
+
     private AuditJobStore newStore() {
         AuditProperties properties = new AuditProperties(
                 workspace, "", "", null, 2, 15, null);
