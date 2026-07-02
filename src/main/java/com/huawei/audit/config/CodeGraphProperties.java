@@ -12,7 +12,8 @@ public record CodeGraphProperties(
         boolean autoIndex,
         Duration initTimeout,
         Duration timeout,
-        Duration initializationTimeout
+        Duration initializationTimeout,
+        String nodeHome
 ) {
     public CodeGraphProperties {
         command = command == null || command.isBlank()
@@ -23,6 +24,7 @@ public record CodeGraphProperties(
         timeout = positiveOrDefault(timeout, Duration.ofMinutes(2));
         initializationTimeout = positiveOrDefault(
                 initializationTimeout, Duration.ofSeconds(30));
+        nodeHome = nodeHome == null ? "" : nodeHome.strip();
     }
 
     public static CodeGraphProperties disabled() {
@@ -33,8 +35,20 @@ public record CodeGraphProperties(
                 false,
                 Duration.ofMinutes(2),
                 Duration.ofMinutes(2),
-                Duration.ofSeconds(30)
+                Duration.ofSeconds(30),
+                ""
         );
+    }
+
+    /**
+     * Machines whose system Node is incompatible with codegraph (it hard-refuses
+     * to run on Node >=25, see colbymchenry/codegraph#81) can point this at a
+     * directory containing a compatible Node binary instead of touching global
+     * PATH/npm shims. Left blank, the child process resolves "node" exactly as
+     * it does today.
+     */
+    public boolean hasNodeHome() {
+        return !nodeHome.isEmpty();
     }
 
     public String mcpToolsEnvValue() {

@@ -3,6 +3,7 @@ package com.huawei.audit.agent;
 import com.huawei.audit.config.CodeGraphProperties;
 import io.agentscope.harness.agent.tools.McpServerConfig;
 import io.agentscope.harness.agent.tools.ToolsConfig;
+import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -75,7 +76,17 @@ public class CodeGraphMcpTooling {
     private Map<String, String> mcpEnv() {
         Map<String, String> env = new LinkedHashMap<>();
         env.put("CODEGRAPH_MCP_TOOLS", properties.mcpToolsEnvValue());
+        if (properties.hasNodeHome()) {
+            env.put("PATH", prependNodeHome(System.getenv("PATH")));
+        }
         return env;
+    }
+
+    private String prependNodeHome(String inheritedPath) {
+        String base = inheritedPath == null ? "" : inheritedPath;
+        return base.isEmpty()
+                ? properties.nodeHome()
+                : properties.nodeHome() + File.pathSeparator + base;
     }
 
     private boolean ensureIndex(Path project, Consumer<String> eventConsumer) {
@@ -124,13 +135,17 @@ public class CodeGraphMcpTooling {
         }
         publish(eventConsumer, "[codegraph] initializing CodeGraph index for MCP tools");
         try {
-            Process process = new ProcessBuilder(
+            ProcessBuilder builder = new ProcessBuilder(
                     effectiveCommand(),
                     "init",
                     project.toString()
             ).redirectErrorStream(true)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                    .start();
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            if (properties.hasNodeHome()) {
+                builder.environment().put(
+                        "PATH", prependNodeHome(builder.environment().get("PATH")));
+            }
+            Process process = builder.start();
             boolean finished = process.waitFor(
                     properties.initTimeout().toMillis(),
                     TimeUnit.MILLISECONDS

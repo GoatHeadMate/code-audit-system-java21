@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.huawei.audit.config.AgentScopeProperties;
 import com.huawei.audit.config.CodeGraphProperties;
 import io.agentscope.harness.agent.tools.ToolsConfig;
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
@@ -54,7 +55,8 @@ class AgentScopeGatewayTest {
                 false,
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(3),
-                Duration.ofSeconds(4)
+                Duration.ofSeconds(4),
+                ""
         ));
 
         ToolsConfig config = tooling.toolsConfig(tempDir, ignored -> {
@@ -82,7 +84,8 @@ class AgentScopeGatewayTest {
                 false,
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(3),
-                Duration.ofSeconds(4)
+                Duration.ofSeconds(4),
+                ""
         ));
 
         ToolsConfig config = tooling.toolsConfig(tempDir, ignored -> {
@@ -101,7 +104,8 @@ class AgentScopeGatewayTest {
                 true,
                 Duration.ofSeconds(2),
                 Duration.ofSeconds(3),
-                Duration.ofSeconds(4)
+                Duration.ofSeconds(4),
+                ""
         ));
         List<String> events = new ArrayList<>();
 
@@ -110,6 +114,47 @@ class AgentScopeGatewayTest {
         assertThat(events)
                 .anySatisfy(event -> assertThat(event).contains("init could not start"))
                 .anySatisfy(event -> assertThat(event).contains("already failed"));
+    }
+
+    @Test
+    void prependsConfiguredNodeHomeToMcpServerPathWhenSet() {
+        CodeGraphMcpTooling tooling = new CodeGraphMcpTooling(new CodeGraphProperties(
+                true,
+                "codegraph",
+                List.of("codegraph_explore"),
+                false,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(4),
+                "D:\\huawei\\tools\\node-v22.23.1-win-x64"
+        ));
+
+        ToolsConfig config = tooling.toolsConfig(tempDir, ignored -> {
+        }).orElseThrow();
+
+        var server = config.getMcpServers().get("codegraph");
+        assertThat(server.getEnv().get("PATH"))
+                .startsWith("D:\\huawei\\tools\\node-v22.23.1-win-x64" + File.pathSeparator);
+    }
+
+    @Test
+    void leavesPathUntouchedWhenNodeHomeNotConfigured() {
+        CodeGraphMcpTooling tooling = new CodeGraphMcpTooling(new CodeGraphProperties(
+                true,
+                "codegraph",
+                List.of("codegraph_explore"),
+                false,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(4),
+                ""
+        ));
+
+        ToolsConfig config = tooling.toolsConfig(tempDir, ignored -> {
+        }).orElseThrow();
+
+        var server = config.getMcpServers().get("codegraph");
+        assertThat(server.getEnv()).doesNotContainKey("PATH");
     }
 
     private static String defaultCodeGraphCommand() {
