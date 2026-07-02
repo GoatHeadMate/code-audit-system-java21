@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class CodeGraphMcpTooling {
     private static final String SERVER_NAME = "codegraph";
+    private static final ConcurrentHashMap<Path, Object> INIT_LOCKS =
+            new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap.KeySetView<Path, Boolean> INIT_FAILURES =
+            ConcurrentHashMap.newKeySet();
 
     private final CodeGraphProperties properties;
 
@@ -45,12 +50,12 @@ public class CodeGraphMcpTooling {
             return Optional.empty();
         }
         Path project = sourceRoot.toAbsolutePath().normalize();
-        if (properties.autoIndex()) {
-            ensureIndex(project, eventConsumer);
+        if (properties.autoIndex() && !ensureIndex(project, eventConsumer)) {
+            return Optional.empty();
         }
         McpServerConfig server = new McpServerConfig();
         server.setTransport("stdio");
-        server.setCommand(properties.command());
+        server.setCommand(effectiveCommand());
         server.setArgs(List.of(
                 "serve",
                 "--mcp",
@@ -73,18 +78,54 @@ public class CodeGraphMcpTooling {
         return env;
     }
 
-    private void ensureIndex(Path project, Consumer<String> eventConsumer) {
+    private boolean ensureIndex(Path project, Consumer<String> eventConsumer) {
+        Path lockKey = project.toAbsolutePath().normalize();
         if (Files.isDirectory(project.resolve(".codegraph"))) {
-            return;
+            INIT_FAILURES.remove(lockKey);
+            return true;
+        }
+        if (INIT_FAILURES.contains(lockKey)) {
+            publish(eventConsumer, "[codegraph] index initialization already failed for this project; "
+                    + "continuing without indexed MCP tools");
+            return false;
+        }
+        Object lock = INIT_LOCKS.computeIfAbsent(lockKey, ignored -> new Object());
+        synchronized (lock) {
+            try {
+                if (Files.isDirectory(project.resolve(".codegraph"))) {
+                    INIT_FAILURES.remove(lockKey);
+                    return true;
+                }
+                if (INIT_FAILURES.contains(lockKey)) {
+                    publish(eventConsumer, "[codegraph] index initialization already failed for this project; "
+                            + "continuing without indexed MCP tools");
+                    return false;
+                }
+                boolean indexed = ensureIndexLocked(project, eventConsumer);
+                if (indexed) {
+                    INIT_FAILURES.remove(lockKey);
+                } else {
+                    INIT_FAILURES.add(lockKey);
+                }
+                return indexed;
+            } finally {
+                INIT_LOCKS.remove(lockKey, lock);
+            }
+        }
+    }
+
+    private boolean ensureIndexLocked(Path project, Consumer<String> eventConsumer) {
+        if (Files.isDirectory(project.resolve(".codegraph"))) {
+            return true;
         }
         if (!Files.isDirectory(project)) {
             publish(eventConsumer, "[codegraph] source root is not a directory; MCP disabled for this session");
-            return;
+            return false;
         }
         publish(eventConsumer, "[codegraph] initializing CodeGraph index for MCP tools");
         try {
             Process process = new ProcessBuilder(
-                    properties.command(),
+                    effectiveCommand(),
                     "init",
                     project.toString()
             ).redirectErrorStream(true)
@@ -98,20 +139,23 @@ public class CodeGraphMcpTooling {
                 process.destroyForcibly();
                 publish(eventConsumer, "[codegraph] init timed out after "
                         + format(properties.initTimeout()) + "; continuing without indexed MCP tools");
-                return;
+                return false;
             }
             if (process.exitValue() != 0) {
                 publish(eventConsumer, "[codegraph] init failed with exit code "
                         + process.exitValue() + "; continuing without indexed MCP tools");
-                return;
+                return false;
             }
             publish(eventConsumer, "[codegraph] index ready for MCP tools");
+            return true;
         } catch (IOException exception) {
             publish(eventConsumer, "[codegraph] init could not start: "
                     + exception.getMessage() + "; continuing without indexed MCP tools");
+            return false;
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             publish(eventConsumer, "[codegraph] init interrupted; continuing without indexed MCP tools");
+            return false;
         }
     }
 
@@ -123,5 +167,18 @@ public class CodeGraphMcpTooling {
 
     private static String format(Duration duration) {
         return duration == null ? "" : duration.toString();
+    }
+
+    String effectiveCommand() {
+        if (isWindows() && "codegraph".equalsIgnoreCase(properties.command())) {
+            return "codegraph.cmd";
+        }
+        return properties.command();
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "")
+                .toLowerCase()
+                .contains("win");
     }
 }

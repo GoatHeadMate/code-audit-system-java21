@@ -373,8 +373,12 @@ class SupervisorAgentTest {
         ArgumentCaptor<Map<String, ClaudeGateway.AgentDef>> agentsCaptor =
                 ArgumentCaptor.forClass(Map.class);
         verify(gateway).supervise(any(), any(), any(), agentsCaptor.capture(), any());
-        assertThat(agentsCaptor.getValue().get("ssrf").tools())
+        ClaudeGateway.AgentDef agent = agentsCaptor.getValue().get("ssrf");
+        assertThat(agent.tools())
                 .contains("codegraph_explore");
+        assertThat(agent.prompt())
+                .contains("If codegraph_explore is available")
+                .contains("call-chain validation");
     }
 
     @Test

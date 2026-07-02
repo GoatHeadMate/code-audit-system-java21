@@ -12,7 +12,7 @@ spring:
       max-request-size: 2GB
 
 server:
-  port: 8000
+  port: 7777
 
 audit:
   workspace: ${AUDIT_WORKSPACE:workspace}
@@ -39,7 +39,7 @@ audit:
     hunter-session-timeout: ${HUNTER_SESSION_TIMEOUT:12m}
     model-slot-timeout: ${MODEL_SLOT_TIMEOUT:2m}
   codegraph:
-    enabled: ${CODEGRAPH_MCP_ENABLED:false}
+    enabled: ${CODEGRAPH_MCP_ENABLED:true}
     command: ${CODEGRAPH_COMMAND:codegraph}
     auto-index: ${CODEGRAPH_AUTO_INDEX:true}
     tools: ${CODEGRAPH_MCP_TOOLS:codegraph_explore}

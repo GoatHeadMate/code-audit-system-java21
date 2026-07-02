@@ -875,7 +875,10 @@ public class SupervisorAgent {
                Validate or reject each hypothesis from source evidence; do not
                execute PoC payloads in this static-review stage.
             5. For each candidate, validate the entrypoint-to-sink path against source code.
-            6. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
+            6. If codegraph_explore is available, use it first for symbol lookup,
+               call-chain validation, and impact checks; then use
+               read_file/glob_files/grep_files for exact source evidence and
+               missing slices.
             7. Never execute shell commands, create files, or delegate to another agent.
             8. Return a single JSON object: {"chunks_reviewed": N, "endpoint_reviewed": N, "findings": [...]}.
                Each finding must contain: rule_id, verdict, title, severity, confidence,
