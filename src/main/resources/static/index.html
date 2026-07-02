@@ -724,8 +724,18 @@ function updateHeader(j) {
     const value = p?.[camel] ?? p?.[snake];
     return value ?? fallback;
   };
-  if (p && (!p.complete || ['running','pending','cloning'].includes(j.status))) {
-    cov.textContent = `第${pv('round', 'round')}轮 · 已审查${pv('reviewedCount', 'reviewed_count')} · 超时${pv('timedOutCount', 'timed_out_count')} · 待处理${pv('remainingCount', 'remaining_count')} · 后台继续审计中`;
+  if (p && ['running','pending','cloning'].includes(j.status)) {
+    cov.textContent = `第${pv('round', 'round')}轮 · 已审查${pv('reviewedCount', 'reviewed_count')} · 待处理${pv('remainingCount', 'remaining_count')} · 后台审计中`;
+    cov.classList.remove('hidden');
+  } else if (p && j.status === 'partial') {
+    const remaining = pv('remainingCount', 'remaining_count');
+    cov.innerHTML = `第${pv('round', 'round')}轮 · 已审查${pv('reviewedCount', 'reviewed_count')} · 待处理${remaining} · 待续跑`
+      + (remaining > 0 ? `
+        <button id="resumeAuditBtn" onclick="resumeAudit('${esc(j.job_id)}', this)"
+          class="ml-2 inline-flex items-center rounded border border-blue-200 px-2 py-0.5 text-[11px] font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60">
+          继续审计
+        </button>
+        <span id="resumeAuditStatus" class="ml-2 text-xs text-slate-400"></span>` : '');
     cov.classList.remove('hidden');
   } else if (p && p.complete && pv('round', 'round') > 0) {
     const ceilingHit = p.ceilingHit ?? p.ceiling_hit;
@@ -1347,7 +1357,7 @@ function mkBadge(status, lg=false) {
     failed:      ['✗','text-red-600 bg-red-50'],
   };
   const [icon,cls] = m[status]||['?','text-slate-500 bg-slate-100'];
-  const anim = ['running','cloning','partial'].includes(status)?' pulse':'';
+  const anim = ['running','cloning'].includes(status)?' pulse':'';
   const px   = lg ? 'px-2 py-0.5 text-xs' : 'px-1.5 py-0.5 text-xs';
   return `<span class="inline-flex items-center gap-1 rounded-full font-medium ${px} ${cls}${anim}">${icon} ${status}</span>`;
 }

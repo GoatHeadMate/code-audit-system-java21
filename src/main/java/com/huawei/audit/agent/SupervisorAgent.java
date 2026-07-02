@@ -2,6 +2,7 @@ package com.huawei.audit.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.huawei.audit.config.CodeGraphProperties;
 import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
 import com.huawei.audit.hunter.FindingParser;
@@ -25,8 +26,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -53,23 +52,30 @@ public class SupervisorAgent {
             "component_candidates",
             "vulnerable_dependencies"
     );
-    private static final int MAX_PARALLEL_HUNTER_SESSIONS = 2;
-    private static final int MAX_HUNTER_SESSIONS_PER_JOB = 24;
-    private static final Duration DEFAULT_HUNTER_SESSION_TIMEOUT =
-            Duration.ofMinutes(12);
-    private static final Duration DEFAULT_MODEL_SLOT_TIMEOUT =
-            Duration.ofMinutes(2);
-
     private final ClaudeGateway gateway;
     private final ObjectMapper objectMapper;
     private final FindingParser findingParser;
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
     private final AuditMemoryService auditMemory;
-    private final Duration hunterSessionTimeout;
-    private final Duration modelSlotTimeout;
+    private final int maxParallelHunterSessions;
+    private final CodeGraphProperties codeGraphProperties;
 
     @org.springframework.beans.factory.annotation.Autowired
+    public SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory,
+            CodeGraphProperties codeGraphProperties
+    ) {
+        this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
+                properties.hunterSessionTimeout(), properties.modelSlotTimeout(),
+                codeGraphProperties);
+    }
+
     public SupervisorAgent(
             ClaudeGateway gateway,
             ObjectMapper objectMapper,
@@ -79,7 +85,8 @@ public class SupervisorAgent {
             AuditMemoryService auditMemory
     ) {
         this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
-                DEFAULT_HUNTER_SESSION_TIMEOUT, DEFAULT_MODEL_SLOT_TIMEOUT);
+                properties.hunterSessionTimeout(), properties.modelSlotTimeout(),
+                CodeGraphProperties.disabled());
     }
 
     SupervisorAgent(
@@ -92,16 +99,31 @@ public class SupervisorAgent {
             Duration hunterSessionTimeout,
             Duration modelSlotTimeout
     ) {
+        this(gateway, objectMapper, findingParser, properties, logs, auditMemory,
+                hunterSessionTimeout, modelSlotTimeout, CodeGraphProperties.disabled());
+    }
+
+    SupervisorAgent(
+            ClaudeGateway gateway,
+            ObjectMapper objectMapper,
+            FindingParser findingParser,
+            OrchestratorProperties properties,
+            JobLogBroker logs,
+            AuditMemoryService auditMemory,
+            Duration hunterSessionTimeout,
+            Duration modelSlotTimeout,
+            CodeGraphProperties codeGraphProperties
+    ) {
         this.gateway = gateway;
         this.objectMapper = objectMapper;
         this.findingParser = findingParser;
         this.properties = properties;
         this.logs = logs;
         this.auditMemory = auditMemory;
-        this.hunterSessionTimeout = positiveOrDefault(
-                hunterSessionTimeout, DEFAULT_HUNTER_SESSION_TIMEOUT);
-        this.modelSlotTimeout = positiveOrDefault(
-                modelSlotTimeout, DEFAULT_MODEL_SLOT_TIMEOUT);
+        this.maxParallelHunterSessions = properties.maxParallelHunterSessions();
+        this.codeGraphProperties = codeGraphProperties == null
+                ? CodeGraphProperties.disabled()
+                : codeGraphProperties;
     }
 
     public SupervisorAgent(
@@ -128,10 +150,6 @@ public class SupervisorAgent {
             Set<String> alreadyFailed
     ) throws Exception {
         Set<String> alreadyAttempted = new LinkedHashSet<>(alreadyReviewed);
-        alreadyAttempted.addAll(alreadyTimedOut);
-        // alreadyFailed (retryable model-slot-wait failures) is intentionally
-        // NOT excluded here — those hunters never actually ran and stay
-        // eligible for this and future rounds.
 
         List<AgentBuild> eligible = collectEligibleBuilds(
                 job.workDir(), sourceRoot, candidates, evidenceManifest,
@@ -200,7 +218,7 @@ public class SupervisorAgent {
         List<String> rationaleParts = new ArrayList<>();
         List<Map<String, Object>> findings = new ArrayList<>();
         List<SessionFuture> futures = new ArrayList<>();
-        Semaphore sessionSlots = new Semaphore(MAX_PARALLEL_HUNTER_SESSIONS);
+        Semaphore sessionSlots = new Semaphore(maxParallelHunterSessions);
 
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
@@ -222,11 +240,7 @@ public class SupervisorAgent {
                     rationaleParts.add(
                             result.hunter() + ": failed - " + result.failure()
                     );
-                    if (isRetryableFailure(result.failure())) {
-                        retryableFailures.add(result.hunter());
-                    } else {
-                        timedOut.add(result.hunter());
-                    }
+                    retryableFailures.add(result.hunter());
                     continue;
                 }
                 SupervisorEnvelope envelope = result.envelope();
@@ -247,18 +261,6 @@ public class SupervisorAgent {
         );
     }
 
-    /**
-     * Only "never actually got to run because no model slot freed up in time"
-     * is retryable. A session that ran the full timeout, crashed, or returned
-     * an unparseable response is terminal — retrying it is expected to
-     * reproduce the same outcome.
-     */
-    private static boolean isRetryableFailure(String failureMessage) {
-        return failureMessage != null
-                && (failureMessage.startsWith("timed out waiting for model slot")
-                        || failureMessage.equals("interrupted while waiting for model slot"));
-    }
-
     private HunterSessionResult superviseHunter(
             AuditJob job,
             Path sourceRoot,
@@ -277,22 +279,15 @@ public class SupervisorAgent {
         long startedAt = createdAt;
         String startedAtText = Instant.now().toString();
         try {
-            if (!sessionSlots.tryAcquire(
-                    modelSlotTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                String failure = "timed out waiting for model slot after "
-                        + modelSlotTimeout;
-                rememberAgentRun(job, hunter, agentDef, "TIMEOUT", startedAtText,
-                        createdAt, startedAt, 0, failure);
-                return new HunterSessionResult(hunter, null, failure);
-            }
+            sessionSlots.acquire();
             slotAcquired = true;
             startedAt = System.nanoTime();
             startedAtText = Instant.now().toString();
             logs.publish(
                     job,
-                    "[supervisor-agent] hunter " + hunter
-                            + " acquired model slot (max_parallel="
-                            + MAX_PARALLEL_HUNTER_SESSIONS + ")"
+                            "[supervisor-agent] hunter " + hunter
+                                    + " acquired model slot (max_parallel="
+                            + maxParallelHunterSessions + ")"
             );
             String response = gateway.supervise(
                     job.workDir(),
@@ -379,20 +374,12 @@ public class SupervisorAgent {
 
     private HunterSessionResult await(SessionFuture sessionFuture) {
         try {
-            return sessionFuture.future()
-                    .get(hunterSessionTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            return sessionFuture.future().get();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(
                     "interrupted while waiting for AgentScope hunter session",
                     interrupted
-            );
-        } catch (TimeoutException timeout) {
-            sessionFuture.future().cancel(true);
-            return new HunterSessionResult(
-                    sessionFuture.hunter(),
-                    null,
-                    "timed out after " + hunterSessionTimeout
             );
         } catch (ExecutionException executionException) {
             throw new IllegalStateException(
@@ -441,12 +428,15 @@ public class SupervisorAgent {
             Set<String> alreadyAttempted
     ) throws IOException {
         String sourceRootStr = sourceRoot.toAbsolutePath().normalize().toString();
-        List<String> readOnlyTools = List.of(
+        List<String> readOnlyTools = new ArrayList<>(List.of(
                 "read_file",
                 "glob_files",
                 "grep_files",
                 "load_skill_through_path"
-        );
+        ));
+        if (codeGraphProperties.enabled()) {
+            readOnlyTools.addAll(codeGraphProperties.tools());
+        }
         List<AgentBuild> builds = new ArrayList<>();
         for (String hunter : candidates) {
             if (alreadyAttempted.contains(hunter)) {
@@ -519,15 +509,6 @@ public class SupervisorAgent {
         return definitionDir;
     }
 
-    /**
-     * Reserves a slot for every batch of each not-yet-attempted mandatory
-     * category first (all batches, not one representative — the supervisor
-     * prompt's own invariant is that all batches of a category are jointly
-     * mandatory), then fills remaining slots by global priority score, capped
-     * at MAX_HUNTER_SESSIONS_PER_JOB. With only one category present this
-     * degrades to a plain priority sort, identical to the pre-existing
-     * behavior.
-     */
     private List<AgentBuild> selectRoundBuilds(List<AgentBuild> eligible, AuditJob job) {
         Set<String> mandatoryNeeded = new LinkedHashSet<>();
         for (AgentBuild build : eligible) {
@@ -548,20 +529,7 @@ public class SupervisorAgent {
                             .reversed()
                             .thenComparing(AgentBuild::hunter))
                     .toList();
-            if (reserved.size() < MAX_HUNTER_SESSIONS_PER_JOB
-                    && reserved.size() + batchesForCategory.size() > MAX_HUNTER_SESSIONS_PER_JOB) {
-                logs.publish(job, "[supervisor-agent] mandatory category "
-                        + mandatoryBase + " alone has " + batchesForCategory.size()
-                        + " batches, exceeding the per-round cap of "
-                        + MAX_HUNTER_SESSIONS_PER_JOB
-                        + "; remaining batches and other categories deferred to a later round");
-            }
-            for (AgentBuild build : batchesForCategory) {
-                if (reserved.size() >= MAX_HUNTER_SESSIONS_PER_JOB) {
-                    break;
-                }
-                reserved.add(build);
-            }
+            reserved.addAll(batchesForCategory);
         }
         Set<String> reservedHunters = new LinkedHashSet<>();
         reserved.forEach(build -> reservedHunters.add(build.hunter()));
@@ -575,12 +543,7 @@ public class SupervisorAgent {
                 .toList();
 
         List<AgentBuild> selected = new ArrayList<>(reserved);
-        for (AgentBuild build : remaining) {
-            if (selected.size() >= MAX_HUNTER_SESSIONS_PER_JOB) {
-                break;
-            }
-            selected.add(build);
-        }
+        selected.addAll(remaining);
         return selected;
     }
 
@@ -839,7 +802,10 @@ public class SupervisorAgent {
                Validate or reject each hypothesis from source evidence; do not
                execute PoC payloads in this static-review stage.
             5. For each candidate, validate the entrypoint-to-sink path against source code.
-            6. Use read_file/glob_files/grep_files to resolve ambiguous dispatch and missing source slices.
+            6. If codegraph_explore is available, use it first for symbol lookup,
+               call-chain validation, and impact checks; then use
+               read_file/glob_files/grep_files for exact source evidence and
+               missing slices.
             7. Never execute shell commands, create files, or delegate to another agent.
             8. Return a single JSON object: {"chunks_reviewed": N, "endpoint_reviewed": N, "findings": [...]}.
                Each finding must contain: rule_id, verdict, title, severity, confidence,

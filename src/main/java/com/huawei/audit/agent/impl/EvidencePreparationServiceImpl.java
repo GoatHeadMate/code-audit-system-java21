@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -62,7 +61,6 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     private final AuditMemoryService auditMemory;
     private final OrchestratorProperties orchestratorProperties;
     private final Semaphore analysisSlot = new Semaphore(1, true);
-    private final long analysisTimeoutMs;
     private final Path cacheDirectory;
 
     public EvidencePreparationServiceImpl(
@@ -80,7 +78,6 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
                 .withArrayIndenter(DefaultIndenter.SYSTEM_LINEFEED_INSTANCE);
         this.prettyWriter = objectMapper.writer(printer);
         this.logs = logs;
-        this.analysisTimeoutMs = properties.hunterTimeout().toMillis();
         this.orchestratorProperties = orchestratorProperties;
         this.claudeGateway = claudeGateway;
         this.auditMemory = auditMemory;
@@ -515,9 +512,7 @@ public class EvidencePreparationServiceImpl implements EvidencePreparationServic
     ) throws Exception {
         if (!analysisSlot.tryAcquire()) {
             logs.publish(job, "[whitebox] waiting for the active analysis to release memory");
-            if (!analysisSlot.tryAcquire(analysisTimeoutMs, TimeUnit.MILLISECONDS)) {
-                throw new IOException("timed out waiting for white-box analysis slot");
-            }
+            analysisSlot.acquire();
         }
         try {
             logs.publish(job, "[whitebox] indexing source in bounded batches");

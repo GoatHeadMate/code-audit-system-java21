@@ -2,6 +2,7 @@ package com.huawei.audit.orchestrator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -12,7 +13,9 @@ import com.huawei.audit.agent.EvidencePreparationService;
 import com.huawei.audit.agent.FindingConsolidator;
 import com.huawei.audit.agent.SubagentDefinitionService;
 import com.huawei.audit.agent.SupervisorAgent;
+import com.huawei.audit.config.OrchestratorProperties;
 import com.huawei.audit.domain.AuditJob;
+import com.huawei.audit.domain.JobStatus;
 import com.huawei.audit.job.JobLogBroker;
 import com.huawei.audit.memory.AuditMemoryService;
 import java.nio.file.Files;
@@ -228,12 +231,13 @@ class IntelligentAuditGraphTest {
     }
 
     @Test
-    void stopsAtRoundCeilingAndReportsCeilingHit() throws Exception {
+    void continuesPastConfiguredRoundCeilingUntilReviewed(@TempDir Path tempDir)
+            throws Exception {
         EvidencePreparationService evidence = mock(EvidencePreparationService.class);
         SubagentDefinitionService definitions = mock(SubagentDefinitionService.class);
         SupervisorAgent supervisor = mock(SupervisorAgent.class);
         AuditJob job = new AuditJob("ceiling123", "java");
-        job.workDir(Path.of("workspace", "audit_ceiling123"));
+        job.workDir(tempDir);
 
         when(evidence.prepare(any(), any(), any(), any())).thenReturn(
                 new EvidencePreparationService.PreparationResult(
@@ -243,16 +247,23 @@ class IntelligentAuditGraphTest {
                 )
         );
         when(definitions.materialize(any(), any(), any())).thenReturn(Map.of());
-        // "ssrf" never actually completes or terminally fails — every round
-        // it only ever fails to acquire a model slot, so the candidate pool
-        // never drains and the loop must stop via the round ceiling instead
-        // of spinning forever.
         when(supervisor.runRound(
                 any(), any(), any(), any(), any(), any(), any(), any(), any(), any()
-        )).thenReturn(
-                new SupervisorAgent.RoundResult(
-                        List.of(), List.of(), List.of(), List.of("ssrf"), "no slot available")
-        );
+        ))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of(), List.of(), List.of("ssrf"), "retry 1"))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of(), List.of(), List.of("ssrf"), "retry 2"))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of(), List.of(), List.of("ssrf"), "retry 3"))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of(), List.of(), List.of("ssrf"), "retry 4"))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of(), List.of(), List.of("ssrf"), "retry 5"))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of(), List.of(), List.of("ssrf"), "retry 6"))
+                .thenReturn(new SupervisorAgent.RoundResult(
+                        List.of(), List.of("ssrf"), List.of(), List.of(), "reviewed"));
 
         IntelligentAuditGraph graph = newGraph(evidence, definitions, supervisor,
                 AuditMemoryService.NOOP);
@@ -260,10 +271,11 @@ class IntelligentAuditGraphTest {
         IntelligentAuditGraph.AuditResult result = graph.invoke(
                 job, Path.of("source"), Map.of(), List.of("ssrf"));
 
-        assertThat(job.ceilingHit()).isTrue();
+        assertThat(job.ceilingHit()).isFalse();
         assertThat(job.continuationComplete()).isTrue();
-        assertThat(result.taskSummary()).containsEntry("ceiling_hit", true);
-        assertThat(job.roundsCompleted()).isEqualTo(5);
+        assertThat(job.status()).isEqualTo(JobStatus.DONE);
+        assertThat(result.taskSummary()).containsEntry("ceiling_hit", false);
+        assertThat(job.roundsCompleted()).isEqualTo(7);
     }
 
     @Test
@@ -313,7 +325,7 @@ class IntelligentAuditGraphTest {
                 AuditMemoryService.NOOP);
         IntelligentAuditGraph.AuditResult result = graph.invokeResumed(
                 job, Path.of("source"), Map.of(), List.of("code_execution"),
-                Set.of(), Set.of(), Set.of());
+                Set.of(), Set.of("code_execution"), Set.of());
 
         assertThat(result.finalFindings()).singleElement().satisfies(f -> {
             assertThat(f).containsEntry("merged_count", 2);
@@ -326,6 +338,10 @@ class IntelligentAuditGraphTest {
         });
         assertThat(result.finalFindings().toString())
                 .doesNotContain("stale-should-not-be-reused");
+        verify(supervisor).runRound(
+                any(), any(), any(), any(), any(), any(), any(),
+                any(), eq(Set.of()), eq(Set.of())
+        );
     }
 
     private IntelligentAuditGraph newGraph(
@@ -343,7 +359,8 @@ class IntelligentAuditGraphTest {
                 new AttackChainCorrelator(),
                 memory,
                 new JobLogBroker(),
-                new ObjectMapper()
+                new ObjectMapper(),
+                new OrchestratorProperties(true, 10, 5, 80)
         );
     }
 

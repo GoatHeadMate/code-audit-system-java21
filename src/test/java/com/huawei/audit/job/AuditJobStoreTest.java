@@ -121,6 +121,46 @@ class AuditJobStoreTest {
                 .containsExactly("partial2");
     }
 
+    @Test
+    void incompleteCoverageAutoResumesEvenWhenPriorProgressWasComplete() throws Exception {
+        Path dir = jobDir("ceiling1");
+        writeMeta(dir, "ceiling1", "done", Set.of(), "");
+        writeFindings(dir, "[]");
+        writeProgress(dir, 5, 3, """
+                "reviewed":["ssrf"],"timed_out":[],"failed_retryable":["code_execution"]
+                """, true, true);
+        Files.createDirectories(dir.resolve("project"));
+
+        AuditJobStore store = newStore();
+
+        AuditJob job = store.find("ceiling1").orElseThrow();
+        assertThat(job.status()).isEqualTo(JobStatus.PARTIAL);
+        assertThat(job.ceilingHit()).isTrue();
+        assertThat(job.continuationComplete()).isFalse();
+        assertThat(store.jobsNeedingResume())
+                .extracting(AuditJob::jobId)
+                .containsExactly("ceiling1");
+    }
+
+    @Test
+    void legacyTimedOutProgressRestoresAsPendingWork() throws Exception {
+        Path dir = jobDir("legacytimeout");
+        writeMeta(dir, "legacytimeout", "done", Set.of(), "");
+        writeFindings(dir, "[]");
+        writeProgress(dir, 1, 2, """
+                "reviewed":["ssrf"],"timed_out":["authorization"],"failed_retryable":[]
+                """, true, false);
+        Files.createDirectories(dir.resolve("project"));
+
+        AuditJobStore store = newStore();
+
+        AuditJob job = store.find("legacytimeout").orElseThrow();
+        assertThat(job.status()).isEqualTo(JobStatus.PARTIAL);
+        assertThat(job.reviewedHunters()).containsExactly("ssrf");
+        assertThat(job.timedOutHunters()).isEmpty();
+        assertThat(job.continuationComplete()).isFalse();
+    }
+
     private AuditJobStore newStore() {
         AuditProperties properties = new AuditProperties(
                 workspace, "", "", null, 2, 15, null);
@@ -158,11 +198,23 @@ class AuditJobStoreTest {
     private void writeProgress(
             Path dir, int round, int totalCandidates, String setFields
     ) throws Exception {
+        writeProgress(dir, round, totalCandidates, setFields, false, false);
+    }
+
+    private void writeProgress(
+            Path dir,
+            int round,
+            int totalCandidates,
+            String setFields,
+            boolean complete,
+            boolean ceilingHit
+    ) throws Exception {
         Files.writeString(dir.resolve("audit-progress.json"), """
                 {
                   "round":%d,"total_candidates":%d,%s,
-                  "complete":false,"ceiling_hit":false,"updated_at":"%s"
+                  "complete":%s,"ceiling_hit":%s,"updated_at":"%s"
                 }
-                """.formatted(round, totalCandidates, setFields, Instant.now()));
+                """.formatted(round, totalCandidates, setFields,
+                complete, ceilingHit, Instant.now()));
     }
 }

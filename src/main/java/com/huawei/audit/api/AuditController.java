@@ -226,10 +226,10 @@ public class AuditController {
                     "failed audit cannot be resumed"
             );
         }
-        if (!progress.ceilingHit() || progress.remainingCount() <= 0) {
+        if (progress.remainingCount() <= 0) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "audit has no ceiling-limited remaining work to resume"
+                    "audit has no remaining work to resume"
             );
         }
         if (job.workDir() == null || !Files.isDirectory(job.workDir())

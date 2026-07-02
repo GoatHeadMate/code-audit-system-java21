@@ -12,7 +12,7 @@ spring:
       max-request-size: 2GB
 
 server:
-  port: 8000
+  port: 7777
 
 audit:
   workspace: ${AUDIT_WORKSPACE:workspace}
@@ -22,13 +22,19 @@ audit:
     api-key: sk_
     base-url: https://open.bigmodel.cn/api/anthropic
     max-iters: ${AGENTSCOPE_MAX_ITERS:80}
-    timeout: ${AGENTSCOPE_TIMEOUT:30m}
+  resume-on-startup: ${AUDIT_RESUME_ON_STARTUP:false}
   max-concurrent-jobs: ${MAX_CONCURRENT_JOBS:2}
   # Limits concurrent evidence preparation tasks; AgentScope uses one Supervisor session.
   max-concurrent-hunters: ${MAX_CONCURRENT_HUNTERS:15}
-  hunter-timeout: ${HUNTER_TIMEOUT:30m}
   orchestrator:
     enabled: ${INTELLIGENT_ORCHESTRATOR_ENABLED:true}
     max-primary-hunters: ${MAX_PRIMARY_HUNTERS:10}
     max-additional-hunters: ${MAX_ADDITIONAL_HUNTERS:5}
     max-chunks-per-batch: ${MAX_CHUNKS_PER_BATCH:80}
+    max-parallel-hunter-sessions: ${MAX_PARALLEL_HUNTER_SESSIONS:2}
+  codegraph:
+    enabled: ${CODEGRAPH_MCP_ENABLED:true}
+    command: C:\Users\23690\AppData\Roaming\npm\codegraph.cmd
+    auto-index: ${CODEGRAPH_AUTO_INDEX:true}
+    tools: ${CODEGRAPH_MCP_TOOLS:codegraph_explore}
+    node-home: D:\huawei\tools\node-v22.23.1-win-x64
