@@ -17,7 +17,6 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,7 +61,7 @@ public class AgentScopeGateway implements ClaudeGateway {
             Msg response = agent.call(
                     new UserMessage(prompt),
                     runtimeContext("query")
-            ).block(effectiveTimeout(timeout));
+            ).block();
             if (response == null || response.getTextContent().isBlank()) {
                 throw new IllegalStateException("AgentScope query returned no result");
             }
@@ -123,12 +122,7 @@ public class AgentScopeGateway implements ClaudeGateway {
             RuntimeContext context = runtimeContext("supervisor");
             agent.streamEvents(new UserMessage(prompt), context)
                     .doOnNext(events::handle)
-                    .timeout(properties.idleTimeout())
-                    .doOnError(TimeoutException.class, error ->
-                            eventConsumer.accept("[supervisor-agent] AgentScope idle timeout after "
-                                    + properties.idleTimeout()
-                                    + " without stream events; failing this hunter session"))
-                    .blockLast(supervisorTotalTimeout(declarations));
+                    .blockLast();
         } finally {
             events.flushAll();
         }
@@ -292,16 +286,6 @@ public class AgentScopeGateway implements ClaudeGateway {
                 .userId(USER_ID)
                 .sessionId(prefix + "-" + UUID.randomUUID())
                 .build();
-    }
-
-    private Duration effectiveTimeout(Duration requested) {
-        return requested == null ? properties.timeout() : requested;
-    }
-
-    private Duration supervisorTotalTimeout(List<SubagentDeclaration> declarations) {
-        int subagentCount = declarations == null ? 0 : declarations.size();
-        int multiplier = Math.max(1, Math.min(subagentCount, 8));
-        return properties.timeout().multipliedBy(multiplier);
     }
 
 }

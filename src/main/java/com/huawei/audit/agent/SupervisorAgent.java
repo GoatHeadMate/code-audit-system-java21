@@ -26,8 +26,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
@@ -60,10 +58,7 @@ public class SupervisorAgent {
     private final OrchestratorProperties properties;
     private final JobLogBroker logs;
     private final AuditMemoryService auditMemory;
-    private final Duration hunterSessionTimeout;
-    private final Duration modelSlotTimeout;
     private final int maxParallelHunterSessions;
-    private final int maxHunterSessionsPerRound;
     private final CodeGraphProperties codeGraphProperties;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -125,12 +120,7 @@ public class SupervisorAgent {
         this.properties = properties;
         this.logs = logs;
         this.auditMemory = auditMemory;
-        this.hunterSessionTimeout = positiveOrDefault(
-                hunterSessionTimeout, properties.hunterSessionTimeout());
-        this.modelSlotTimeout = positiveOrDefault(
-                modelSlotTimeout, properties.modelSlotTimeout());
         this.maxParallelHunterSessions = properties.maxParallelHunterSessions();
-        this.maxHunterSessionsPerRound = properties.maxHunterSessionsPerRound();
         this.codeGraphProperties = codeGraphProperties == null
                 ? CodeGraphProperties.disabled()
                 : codeGraphProperties;
@@ -254,11 +244,7 @@ public class SupervisorAgent {
                     rationaleParts.add(
                             result.hunter() + ": failed - " + result.failure()
                     );
-                    if (isRetryableFailure(result.failure())) {
-                        retryableFailures.add(result.hunter());
-                    } else {
-                        timedOut.add(result.hunter());
-                    }
+                    retryableFailures.add(result.hunter());
                     continue;
                 }
                 SupervisorEnvelope envelope = result.envelope();
@@ -279,18 +265,6 @@ public class SupervisorAgent {
         );
     }
 
-    /**
-     * Slot-wait timeouts never reached the model, and session timeouts may
-     * complete under a larger follow-up budget. Parse/framework failures stay
-     * terminal because repeating the same prompt is likely to reproduce them.
-     */
-    private static boolean isRetryableFailure(String failureMessage) {
-        return failureMessage != null
-                && (failureMessage.startsWith("timed out waiting for model slot")
-                        || failureMessage.startsWith("timed out after ")
-                        || failureMessage.equals("interrupted while waiting for model slot"));
-    }
-
     private HunterSessionResult superviseHunter(
             AuditJob job,
             Path sourceRoot,
@@ -309,14 +283,7 @@ public class SupervisorAgent {
         long startedAt = createdAt;
         String startedAtText = Instant.now().toString();
         try {
-            if (!sessionSlots.tryAcquire(
-                    modelSlotTimeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                String failure = "timed out waiting for model slot after "
-                        + modelSlotTimeout;
-                rememberAgentRun(job, hunter, agentDef, "TIMEOUT", startedAtText,
-                        createdAt, startedAt, 0, failure);
-                return new HunterSessionResult(hunter, null, failure);
-            }
+            sessionSlots.acquire();
             slotAcquired = true;
             startedAt = System.nanoTime();
             startedAtText = Instant.now().toString();
@@ -411,20 +378,12 @@ public class SupervisorAgent {
 
     private HunterSessionResult await(SessionFuture sessionFuture) {
         try {
-            return sessionFuture.future()
-                    .get(hunterSessionTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            return sessionFuture.future().get();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(
                     "interrupted while waiting for AgentScope hunter session",
                     interrupted
-            );
-        } catch (TimeoutException timeout) {
-            sessionFuture.future().cancel(true);
-            return new HunterSessionResult(
-                    sessionFuture.hunter(),
-                    null,
-                    "timed out after " + hunterSessionTimeout
             );
         } catch (ExecutionException executionException) {
             throw new IllegalStateException(
@@ -554,15 +513,6 @@ public class SupervisorAgent {
         return definitionDir;
     }
 
-    /**
-     * Reserves a slot for every batch of each not-yet-attempted mandatory
-     * category first (all batches, not one representative — the supervisor
-     * prompt's own invariant is that all batches of a category are jointly
-     * mandatory), then fills remaining slots by global priority score, capped
-     * at the configured per-round cap. With only one category present this
-     * degrades to a plain priority sort, identical to the pre-existing
-     * behavior.
-     */
     private List<AgentBuild> selectRoundBuilds(List<AgentBuild> eligible, AuditJob job) {
         Set<String> mandatoryNeeded = new LinkedHashSet<>();
         for (AgentBuild build : eligible) {
@@ -583,21 +533,7 @@ public class SupervisorAgent {
                             .reversed()
                             .thenComparing(AgentBuild::hunter))
                     .toList();
-            if (reserved.size() < maxHunterSessionsPerRound
-                    && reserved.size() + batchesForCategory.size()
-                            > maxHunterSessionsPerRound) {
-                logs.publish(job, "[supervisor-agent] mandatory category "
-                        + mandatoryBase + " alone has " + batchesForCategory.size()
-                        + " batches, exceeding the per-round cap of "
-                        + maxHunterSessionsPerRound
-                        + "; remaining batches and other categories deferred to a later round");
-            }
-            for (AgentBuild build : batchesForCategory) {
-                if (reserved.size() >= maxHunterSessionsPerRound) {
-                    break;
-                }
-                reserved.add(build);
-            }
+            reserved.addAll(batchesForCategory);
         }
         Set<String> reservedHunters = new LinkedHashSet<>();
         reserved.forEach(build -> reservedHunters.add(build.hunter()));
@@ -611,12 +547,7 @@ public class SupervisorAgent {
                 .toList();
 
         List<AgentBuild> selected = new ArrayList<>(reserved);
-        for (AgentBuild build : remaining) {
-            if (selected.size() >= maxHunterSessionsPerRound) {
-                break;
-            }
-            selected.add(build);
-        }
+        selected.addAll(remaining);
         return selected;
     }
 

@@ -3,17 +3,17 @@ package com.huawei.audit.agent;
 import com.huawei.audit.config.CodeGraphProperties;
 import io.agentscope.harness.agent.tools.McpServerConfig;
 import io.agentscope.harness.agent.tools.ToolsConfig;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
 
@@ -65,8 +65,6 @@ public class CodeGraphMcpTooling {
         ));
         server.setEnv(mcpEnv());
         server.setEnableTools(properties.tools());
-        server.setTimeout(properties.timeout());
-        server.setInitializationTimeout(properties.initializationTimeout());
 
         ToolsConfig config = new ToolsConfig();
         config.setMcpServers(Map.of(SERVER_NAME, server));
@@ -139,26 +137,20 @@ public class CodeGraphMcpTooling {
                     effectiveCommand(),
                     "init",
                     project.toString()
-            ).redirectErrorStream(true)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            ).redirectErrorStream(true);
             if (properties.hasNodeHome()) {
                 builder.environment().put(
                         "PATH", prependNodeHome(builder.environment().get("PATH")));
             }
             Process process = builder.start();
-            boolean finished = process.waitFor(
-                    properties.initTimeout().toMillis(),
-                    TimeUnit.MILLISECONDS
-            );
-            if (!finished) {
-                process.destroyForcibly();
-                publish(eventConsumer, "[codegraph] init timed out after "
-                        + format(properties.initTimeout()) + "; continuing without indexed MCP tools");
-                return false;
-            }
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            Thread outputReader = Thread.ofVirtual().start(() -> copyOutput(process, output));
+            process.waitFor();
+            waitForOutput(outputReader);
             if (process.exitValue() != 0) {
                 publish(eventConsumer, "[codegraph] init failed with exit code "
-                        + process.exitValue() + "; continuing without indexed MCP tools");
+                        + process.exitValue() + formatOutput(output)
+                        + "; continuing without indexed MCP tools");
                 return false;
             }
             publish(eventConsumer, "[codegraph] index ready for MCP tools");
@@ -180,8 +172,36 @@ public class CodeGraphMcpTooling {
         }
     }
 
-    private static String format(Duration duration) {
-        return duration == null ? "" : duration.toString();
+    private static void copyOutput(Process process, ByteArrayOutputStream output) {
+        try {
+            process.getInputStream().transferTo(output);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static void waitForOutput(Thread outputReader) {
+        try {
+            outputReader.join(1_000);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static String formatOutput(ByteArrayOutputStream output) {
+        String text = output.toString(StandardCharsets.UTF_8)
+                .replaceAll("\\u001B\\[[;\\d]*[ -/]*[@-~]", "")
+                .replace('\r', ' ')
+                .replace('\n', ' ')
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (text.isEmpty()) {
+            return "";
+        }
+        int maxLength = 800;
+        String summary = text.length() <= maxLength
+                ? text
+                : text.substring(0, maxLength) + "...";
+        return "; output: " + summary;
     }
 
     String effectiveCommand() {

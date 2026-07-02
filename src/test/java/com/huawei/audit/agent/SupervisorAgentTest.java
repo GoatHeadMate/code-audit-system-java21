@@ -226,9 +226,9 @@ class SupervisorAgentTest {
                 Set.of()
         );
 
-        assertThat(result.timedOut()).containsExactly("code_execution");
+        assertThat(result.timedOut()).isEmpty();
         assertThat(result.reviewed()).isEmpty();
-        assertThat(result.retryableFailures()).isEmpty();
+        assertThat(result.retryableFailures()).containsExactly("code_execution");
         assertThat(result.findings()).isEmpty();
         assertThat(result.rationale())
                 .contains("supervisor response unparseable")
@@ -349,7 +349,8 @@ class SupervisorAgentTest {
                         false,
                         Duration.ofSeconds(2),
                         Duration.ofSeconds(3),
-                        Duration.ofSeconds(4)
+                        Duration.ofSeconds(4),
+                        ""
                 )
         );
         AuditJob job = new AuditJob("codegraph-tools123", "java");
@@ -866,7 +867,7 @@ class SupervisorAgentTest {
     }
 
     @Test
-    void capsHunterSessionsToHighestPriorityTasks() throws Exception {
+    void runsAllEligibleHunterSessionsInOneRound() throws Exception {
         AtomicInteger calls = new AtomicInteger();
         List<String> invoked = new ArrayList<>();
         ClaudeGateway gateway = mock(ClaudeGateway.class);
@@ -907,14 +908,14 @@ class SupervisorAgentTest {
         supervisor.runRound(job, Path.of("source"), Map.of(), candidates,
                 manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of());
 
-        assertThat(calls).hasValue(24);
+        assertThat(calls).hasValue(30);
         assertThat(invoked)
                 .contains("ssrf_batch_0", "ssrf_batch_23")
-                .doesNotContain("ssrf_batch_24", "ssrf_batch_29");
+                .contains("ssrf_batch_24", "ssrf_batch_29");
     }
 
     @Test
-    void reservesSlotsForEachMandatoryCategoryBeforeFillingByPriority()
+    void keepsMandatoryCategoriesInTheSameRoundAsHighPriorityBatches()
             throws Exception {
         AtomicInteger calls = new AtomicInteger();
         List<String> invoked = new ArrayList<>();
@@ -952,9 +953,6 @@ class SupervisorAgentTest {
         job.workDir(tempDir.resolve("audit_mandatory123"));
         Files.createDirectories(job.workDir());
 
-        // 25 non-mandatory batches all scored far above the 3 mandatory
-        // categories, so a pure global-priority sort would crowd every
-        // mandatory category out of the 24-slot cap entirely.
         List<String> candidates = new ArrayList<>();
         Map<String, String> manifest = new LinkedHashMap<>();
         for (int i = 0; i < 25; i++) {
@@ -970,17 +968,19 @@ class SupervisorAgentTest {
         supervisor.runRound(job, Path.of("source"), Map.of(), candidates,
                 manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of());
 
-        assertThat(calls).hasValue(24);
-        assertThat(invoked).contains("authorization", "code_execution", "ssrf");
+        assertThat(calls).hasValue(28);
+        assertThat(invoked)
+                .contains("authorization", "code_execution", "ssrf")
+                .contains("sql_injection_batch_24");
     }
 
     @Test
-    void retryableModelSlotFailuresAreDistinctFromTerminalTimeouts()
+    void waitsForModelSlotsInsteadOfFailingWithinRound()
             throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
         when(gateway.supervise(any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
-                    Thread.sleep(300);
+                    Thread.sleep(100);
                     Map<String, ClaudeGateway.AgentDef> agents = invocation.getArgument(3);
                     String hunter = agents.keySet().iterator().next();
                     return """
@@ -996,15 +996,12 @@ class SupervisorAgentTest {
                 new JobLogBroker(),
                 AuditMemoryService.NOOP,
                 Duration.ofSeconds(5),
-                Duration.ofMillis(50)
+                Duration.ofMillis(1)
         );
         AuditJob job = new AuditJob("slotwait123", "java");
         job.workDir(tempDir.resolve("audit_slotwait123"));
         Files.createDirectories(job.workDir());
 
-        // 3 hunters, only 2 model slots: the 3rd cannot acquire within 50ms
-        // and never actually runs, so it must be classified retryable, not a
-        // terminal timeout.
         var result = supervisor.runRound(
                 job,
                 Path.of("source"),
@@ -1022,17 +1019,17 @@ class SupervisorAgentTest {
                 Set.of()
         );
 
-        assertThat(result.reviewed()).hasSize(2);
-        assertThat(result.retryableFailures()).hasSize(1);
+        assertThat(result.reviewed()).hasSize(3);
+        assertThat(result.retryableFailures()).isEmpty();
         assertThat(result.timedOut()).isEmpty();
     }
 
     @Test
-    void timesOutHungHunterSession() throws Exception {
+    void waitsForSlowHunterSessionToComplete() throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
         when(gateway.supervise(any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
-                    Thread.sleep(TimeUnit.SECONDS.toMillis(5));
+                    Thread.sleep(150);
                     return """
                             {"selected_hunters":["ssrf"],"rationale":"late","findings":[]}
                             """;
@@ -1045,7 +1042,7 @@ class SupervisorAgentTest {
                 new OrchestratorProperties(true, 10, 5, 80),
                 new JobLogBroker(),
                 AuditMemoryService.NOOP,
-                Duration.ofMillis(100),
+                Duration.ofMillis(1),
                 Duration.ofMillis(50)
         );
         AuditJob job = new AuditJob("timeout123", "java");
@@ -1065,18 +1062,18 @@ class SupervisorAgentTest {
                 Set.of()
         );
 
+        assertThat(result.reviewed()).containsExactly("ssrf");
         assertThat(result.timedOut()).isEmpty();
-        assertThat(result.reviewed()).isEmpty();
-        assertThat(result.retryableFailures()).containsExactly("ssrf");
-        assertThat(result.rationale()).contains("timed out after");
+        assertThat(result.retryableFailures()).isEmpty();
+        assertThat(result.rationale()).contains("late");
     }
 
     @Test
-    void hunterSessionTimeoutIsRetryableAcrossResume() throws Exception {
+    void slowHunterSessionDoesNotNeedResume() throws Exception {
         ClaudeGateway gateway = mock(ClaudeGateway.class);
         when(gateway.supervise(any(), any(), any(), any(), any()))
                 .thenAnswer(invocation -> {
-                    Thread.sleep(TimeUnit.SECONDS.toMillis(5));
+                    Thread.sleep(150);
                     return """
                             {"selected_hunters":["ssrf"],"rationale":"late","findings":[]}
                             """;
@@ -1092,7 +1089,7 @@ class SupervisorAgentTest {
                 new OrchestratorProperties(true, 10, 5, 80),
                 new JobLogBroker(),
                 AuditMemoryService.NOOP,
-                Duration.ofMillis(100),
+                Duration.ofMillis(1),
                 Duration.ofMillis(50)
         );
         AuditJob job = new AuditJob("timeoutretry123", "java");
@@ -1104,14 +1101,15 @@ class SupervisorAgentTest {
                 job, Path.of("source"), Map.of(), List.of("ssrf"),
                 manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of()
         );
+        assertThat(firstRound.reviewed()).containsExactly("ssrf");
         assertThat(firstRound.timedOut()).isEmpty();
-        assertThat(firstRound.retryableFailures()).containsExactly("ssrf");
+        assertThat(firstRound.retryableFailures()).isEmpty();
 
         var secondRound = supervisor.runRound(
                 job, Path.of("source"), Map.of(), List.of("ssrf"),
-                manifest, Map.of(), Map.of(), Set.of(), Set.of(), Set.of("ssrf")
+                manifest, Map.of(), Map.of(), Set.of("ssrf"), Set.of(), Set.of()
         );
-        assertThat(secondRound.reviewed()).containsExactly("ssrf");
+        assertThat(secondRound.reviewed()).isEmpty();
         assertThat(secondRound.timedOut()).isEmpty();
         assertThat(secondRound.retryableFailures()).isEmpty();
     }

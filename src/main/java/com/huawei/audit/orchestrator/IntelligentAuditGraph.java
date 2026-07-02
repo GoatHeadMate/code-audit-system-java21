@@ -141,12 +141,10 @@ public class IntelligentAuditGraph {
             int startingRound
     ) throws Exception {
         int round = startingRound;
-        Instant jobDeadline = Instant.now().plus(properties.maxTotalJobDuration());
         List<Map<String, Object>> finalFindings = List.of();
         List<Map<String, Object>> deduped = List.of();
         List<Map<String, Object>> chains = List.of();
         String lastRationale = "";
-        boolean ceilingReached = false;
 
         while (true) {
             round++;
@@ -159,7 +157,6 @@ public class IntelligentAuditGraph {
             accumulatedRaw.addAll(roundResult.findings());
             appendRawFindings(job, roundResult.findings());
             reviewed.addAll(roundResult.reviewed());
-            timedOut.addAll(roundResult.timedOut());
             retryableFailed.clear();
             retryableFailed.addAll(roundResult.retryableFailures());
             lastRationale = roundResult.rationale();
@@ -171,25 +168,22 @@ public class IntelligentAuditGraph {
             finalFindings = new ArrayList<>(deduped);
             finalFindings.addAll(chains);
 
-            int attemptedDoneCount = reviewed.size() + timedOut.size();
-            boolean fullyDrained = attemptedDoneCount >= preparation.expandedCandidates().size();
-            ceilingReached = !fullyDrained
-                    && (round >= properties.maxRounds() || Instant.now().isAfter(jobDeadline));
-            boolean moreRoundsRemain = !fullyDrained && !ceilingReached;
+            boolean fullyDrained = reviewed.size() >= preparation.expandedCandidates().size();
+            boolean moreRoundsRemain = !fullyDrained;
 
             job.mergeRoundOutcome(
                     round, finalFindings,
                     Set.copyOf(roundResult.reviewed()),
-                    Set.copyOf(roundResult.timedOut()),
+                    Set.of(),
                     Set.copyOf(roundResult.retryableFailures()),
-                    moreRoundsRemain, ceilingReached
+                    moreRoundsRemain, false
             );
             persistProgress(job, round, preparation.expandedCandidates().size(),
-                    reviewed, timedOut, retryableFailed, !moreRoundsRemain, ceilingReached);
+                    reviewed, Set.of(), retryableFailed, !moreRoundsRemain, false);
             persistFindings(job, finalFindings);
 
             int remainingCount = Math.max(0,
-                    preparation.expandedCandidates().size() - reviewed.size() - timedOut.size());
+                    preparation.expandedCandidates().size() - reviewed.size());
             logs.publish(job, "[orchestrator] round " + round + " complete; reviewed="
                     + reviewed.size() + " timedOut=" + timedOut.size()
                     + " retryable=" + retryableFailed.size() + " remaining=" + remainingCount
@@ -203,7 +197,7 @@ public class IntelligentAuditGraph {
         Map<String, Object> summary = buildTaskSummary(
                 candidates, reviewed, timedOut, retryableFailed, accumulatedRaw.size(),
                 deduped, chains, finalFindings, lastRationale, preparation, round,
-                ceilingReached
+                false
         );
         auditMemory.rememberFindings(job, sourceRoot, techProfile, finalFindings);
         return new AuditResult(finalFindings, deduplicator.statistics(finalFindings), summary);

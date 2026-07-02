@@ -18,7 +18,6 @@ import java.util.function.Consumer;
 public class ClaudeSidecarClient implements ClaudeGateway {
     private final URI baseUri;
     private final String apiToken;
-    private final Duration defaultTimeout;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
@@ -30,10 +29,8 @@ public class ClaudeSidecarClient implements ClaudeGateway {
                 properties.claudeSidecarUrl()
         ));
         this.apiToken = properties.claudeSidecarToken();
-        this.defaultTimeout = properties.claudeSidecarTimeout();
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(defaultTimeout)
                 .build();
         this.objectMapper = objectMapper;
     }
@@ -50,7 +47,7 @@ public class ClaudeSidecarClient implements ClaudeGateway {
                     workingDirectory.toAbsolutePath().normalize().toString()
             ));
             HttpResponse<String> response = httpClient.send(
-                    request("/v1/query", timeout, body),
+                    request("/v1/query", body),
                     HttpResponse.BodyHandlers.ofString()
             );
             requireSuccess(response.statusCode(), response.body());
@@ -82,7 +79,7 @@ public class ClaudeSidecarClient implements ClaudeGateway {
             ));
             HttpResponse<java.util.stream.Stream<String>> response =
                     httpClient.send(
-                            request("/v1/supervise", defaultTimeout, body),
+                            request("/v1/supervise", body),
                             HttpResponse.BodyHandlers.ofLines()
                     );
             requireSuccess(response.statusCode(), "");
@@ -129,12 +126,10 @@ public class ClaudeSidecarClient implements ClaudeGateway {
 
     private HttpRequest request(
             String path,
-            Duration timeout,
             String body
     ) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(
                         baseUri.resolve(path))
-                .timeout(timeout == null ? defaultTimeout : timeout)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         if (!apiToken.isBlank()) {

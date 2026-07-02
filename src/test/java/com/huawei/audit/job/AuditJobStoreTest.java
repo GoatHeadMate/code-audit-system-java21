@@ -122,7 +122,7 @@ class AuditJobStoreTest {
     }
 
     @Test
-    void ceilingLimitedPartialJobDoesNotAutoResumeOnRestart() throws Exception {
+    void incompleteCoverageAutoResumesEvenWhenPriorProgressWasComplete() throws Exception {
         Path dir = jobDir("ceiling1");
         writeMeta(dir, "ceiling1", "done", Set.of(), "");
         writeFindings(dir, "[]");
@@ -136,8 +136,10 @@ class AuditJobStoreTest {
         AuditJob job = store.find("ceiling1").orElseThrow();
         assertThat(job.status()).isEqualTo(JobStatus.PARTIAL);
         assertThat(job.ceilingHit()).isTrue();
-        assertThat(job.continuationComplete()).isTrue();
-        assertThat(store.jobsNeedingResume()).isEmpty();
+        assertThat(job.continuationComplete()).isFalse();
+        assertThat(store.jobsNeedingResume())
+                .extracting(AuditJob::jobId)
+                .containsExactly("ceiling1");
     }
 
     private AuditJobStore newStore() {

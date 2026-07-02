@@ -8,6 +8,7 @@ import io.agentscope.harness.agent.tools.ToolsConfig;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -117,6 +118,29 @@ class AgentScopeGatewayTest {
     }
 
     @Test
+    void includesCodeGraphInitOutputWhenCommandExitsNonZero() throws Exception {
+        Path command = failingCommand();
+        CodeGraphMcpTooling tooling = new CodeGraphMcpTooling(new CodeGraphProperties(
+                true,
+                command.toString(),
+                List.of("codegraph_explore"),
+                true,
+                Duration.ofSeconds(2),
+                Duration.ofSeconds(3),
+                Duration.ofSeconds(4),
+                ""
+        ));
+        List<String> events = new ArrayList<>();
+
+        assertThat(tooling.toolsConfig(tempDir, events::add)).isEmpty();
+
+        assertThat(events)
+                .anySatisfy(event -> assertThat(event)
+                        .contains("init failed with exit code")
+                        .contains("simulated init failure"));
+    }
+
+    @Test
     void prependsConfiguredNodeHomeToMcpServerPathWhenSet() {
         CodeGraphMcpTooling tooling = new CodeGraphMcpTooling(new CodeGraphProperties(
                 true,
@@ -163,5 +187,17 @@ class AgentScopeGatewayTest {
                         .contains("win")
                 ? "codegraph.cmd"
                 : "codegraph";
+    }
+
+    private Path failingCommand() throws Exception {
+        if (System.getProperty("os.name", "").toLowerCase().contains("win")) {
+            Path command = tempDir.resolve("failing-codegraph.cmd");
+            Files.writeString(command, "@echo simulated init failure\r\n@exit /b 7\r\n");
+            return command;
+        }
+        Path command = tempDir.resolve("failing-codegraph");
+        Files.writeString(command, "#!/usr/bin/env sh\necho simulated init failure\nexit 7\n");
+        command.toFile().setExecutable(true);
+        return command;
     }
 }

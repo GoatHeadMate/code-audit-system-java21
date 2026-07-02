@@ -147,13 +147,6 @@ public final class ApiDtos {
         }
     }
 
-    /**
-     * Round-scheduling coverage for a job. `complete` means no further
-     * automatic continuation will happen (either the candidate pool drained,
-     * or the round/time safety ceiling was reached) — not that every
-     * candidate was necessarily reviewed; check ceilingHit for that
-     * distinction.
-     */
     public record ProgressInfo(
             int round,
             int totalCandidates,
@@ -169,7 +162,7 @@ public final class ApiDtos {
             int reviewed = job.reviewedHunters().size();
             int timedOut = job.timedOutHunters().size();
             int failed = job.failedHunters().size();
-            int remaining = Math.max(0, total - reviewed - timedOut);
+            int remaining = Math.max(0, total - reviewed);
             return new ProgressInfo(
                     job.roundsCompleted(),
                     total,

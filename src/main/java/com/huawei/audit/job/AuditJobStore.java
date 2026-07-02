@@ -192,8 +192,16 @@ public class AuditJobStore {
                 job.cacheKey(meta.path("cache_key").asText(""));
             }
             job.projectPath(resolveSourceRoot(projectDir));
-            if (ceilingHit && remainingCount(totalCandidates, reviewed, timedOut) > 0) {
+            if ((ceilingHit || complete) && remainingCount(totalCandidates, reviewed) > 0) {
                 status = JobStatus.PARTIAL;
+                job.restoreProgress(
+                        progress.path("round").asInt(0),
+                        reviewed,
+                        timedOut,
+                        retryable,
+                        false,
+                        ceilingHit
+                );
             }
         }
 
@@ -225,10 +233,9 @@ public class AuditJobStore {
 
     private int remainingCount(
             int totalCandidates,
-            Set<String> reviewed,
-            Set<String> timedOut
+            Set<String> reviewed
     ) {
-        return Math.max(0, totalCandidates - reviewed.size() - timedOut.size());
+        return Math.max(0, totalCandidates - reviewed.size());
     }
 
     private Path resolveSourceRoot(Path projectDir) throws IOException {

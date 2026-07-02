@@ -11,7 +11,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.springframework.stereotype.Component;
 
@@ -84,21 +83,10 @@ public class ProcessRunner {
             process.getOutputStream().close();
         }
 
-        if (timeout != null) {
-            boolean completed = process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            if (!completed) {
-                process.destroy();
-                if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                }
-                throw new IOException("process timed out after " + timeout + ": " + command);
-            }
-        } else {
-            process.waitFor();
-        }
+        process.waitFor();
 
         try {
-            reader.get(5, TimeUnit.SECONDS);
+            reader.get();
         } catch (Exception ignored) {
             reader.cancel(true);
         }
