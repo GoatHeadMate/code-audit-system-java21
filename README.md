@@ -197,47 +197,113 @@ $env:AUDIT_AGENTSCOPE_BASE_URL = ""
 
 这几个环境变量会覆盖 `application.yml` 里的值,因为 Spring Boot 的属性源优先级里,操作系统环境变量高于 classpath 配置文件。**不要把真实 API key 直接写进 `application.yml`**——这个字段已经泄露过一次真实密钥到工作区了;要么用上面的环境变量形式,要么把 yml 改成 `${AGENTSCOPE_API_KEY:}` 这种占位符,和同一个文件里 `max-iters`/`timeout` 的写法保持一致。
 
-## 运行
+## 在新电脑上从零启动
+
+下面是在一台**全新机器**上把这个分支跑起来的完整步骤。三块：必需的 JDK/Maven（不装跑不起来）、模型密钥（不配没法审计）、可选的 CodeGraph（不装也能审，只是少一个加速工具）。命令以 Windows PowerShell 为例。
+
+### 0. 依赖清单
+
+| 组件 | 版本要求 | 是否必需 | 备注 |
+|---|---|---|---|
+| JDK | **21**（Temurin / Oracle / Zulu 均可） | 必需 | 项目 `java.version=21`，用 17 会编译失败 |
+| Maven | 3.8+ | 必需 | 仓库**没有** `mvnw` wrapper，得自己装 Maven |
+| 模型 API key | —— | 必需 | Anthropic / OpenAI 兼容 / DashScope 三选一 |
+| Node.js | **20 ≤ 版本 < 25**（推荐 22 LTS） | 仅 CodeGraph 需要 | CodeGraph 硬性拒绝 Node 25+，见下方第 3 步 |
+| CodeGraph | 1.1.x | 可选 | 不装就设 `CODEGRAPH_MCP_ENABLED=false` |
+
+### 1. 装 JDK 21 + Maven
+
+装好 JDK 21，把 `JAVA_HOME` 指向它；装好 Maven。验证两者都在用 Java 21：
 
 ```powershell
-$env:JAVA_HOME = "E:\Softwares\jdk-21.0.10+7"
+$env:JAVA_HOME = "C:\path\to\jdk-21"          # 换成你机器上的 JDK 21 路径
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+mvn -v      # 输出里 "Java version: 21.x" 才算对；显示 17 说明 JAVA_HOME 没生效
+```
+
+> 常见坑：机器上装了多个 JDK 时 `java -version` 可能显示 17 或别的版本，不用管——Maven 用的是 `JAVA_HOME`，只要 `mvn -v` 那行 Java version 是 21 就行。
+
+### 2. 先跑起来（不带 CodeGraph 的最小可用）
+
+配好模型密钥、先把 CodeGraph 关掉，确认主流程能通：
+
+```powershell
+# 模型 provider（三选一，这里以 anthropic 兼容网关为例）
 $env:AUDIT_AGENTSCOPE_PROVIDER = "anthropic"
-$env:AUDIT_AGENTSCOPE_API_KEY = "换成你自己的本地密钥"
-$env:AUDIT_AGENTSCOPE_MODEL = "claude-sonnet-4-5-20250929"
+$env:AUDIT_AGENTSCOPE_API_KEY  = "换成你自己的密钥"
+$env:AUDIT_AGENTSCOPE_MODEL    = "claude-sonnet-4-5-20250929"
+$env:AUDIT_AGENTSCOPE_BASE_URL = ""            # 用官方端点就留空；走代理网关才填
+
+# 第一次先不接 CodeGraph，排除 Node 相关问题的干扰
+$env:CODEGRAPH_MCP_ENABLED = "false"
+
 mvn spring-boot:run
 ```
 
-当前分支默认监听 `http://localhost:7777`,根路径 `/` 直接提供静态前端。这个分支不需要额外起 Python 进程。
+启动后浏览器打开 `http://localhost:7777`，根路径直接是前端页面，上传 ZIP 或填 Git URL 就能提交审计。这个分支**不需要**额外起 Python 进程。
 
-后端启动时会从 `workspace` 恢复历史任务列表。默认不会自动续跑 partial 任务,避免刚启动服务就消耗模型额度；前端任务卡片上的"继续审计"按钮会调用续跑接口。如果确实需要恢复旧行为,设置：
+> - 模型为什么用 `AUDIT_AGENTSCOPE_*` 这种长名字、`application.yml` 里那几个字段是写死字面量的坑，见上面「模型 provider」一节。**别把真实 key 写进 `application.yml` 提交上去。**
+> - 后端启动会从 `workspace` 恢复历史任务列表，但默认**不自动续跑** partial 任务（避免一开机就烧模型额度）；需要开机自动续跑就设 `AUDIT_RESUME_ON_STARTUP=true`。
+
+### 3.（可选）装 CodeGraph
+
+CodeGraph 给子代理提供调用关系/影响面查询工具（原理见 [CodeGraph MCP](#codegraph-mcp) 一节）。不装完全不影响审计，装了能让复核更快、更省 token。
+
+**第一步：装一个兼容版本的 Node。** CodeGraph 在 Node **25 及以上会直接拒绝启动**（tree-sitter 的 WASM JIT 在新版 Node 上会崩，这是 CodeGraph 自己代码里的硬门槛，不是软提示）。装 **Node 22 LTS** 最省心：
 
 ```powershell
-$env:AUDIT_RESUME_ON_STARTUP = "true"
+node -v      # 若是 v25 / v26，CodeGraph 跑不起来，见下面「Node 版本不对怎么办」
 ```
 
-### CodeGraph MCP 运行示例
+**第二步：拉下来、编译、全局链接。**
 
-如果已经把 CodeGraph build 并 npm link 到全局,可以直接用默认命令；Windows 上更稳的方式是显式配置 `codegraph.cmd` 和兼容 Node：
+```powershell
+git clone https://github.com/colbymchenry/codegraph.git
+cd codegraph
+npm install
+npm run build          # tsc 编译 + 拷贝 wasm/schema 资源，产出 dist/
+npm link               # 全局注册 codegraph 命令（Windows 上会生成 codegraph.cmd）
+codegraph --version    # 能打印版本号 = 装好了
+```
+
+`npm link` 会在 `%AppData%\Roaming\npm\` 下生成 `codegraph` / `codegraph.cmd`，这个目录通常已经在 PATH 里，后端就能直接调到 `codegraph`。
+
+**第三步：在后端启用它。**
 
 ```powershell
 $env:CODEGRAPH_MCP_ENABLED = "true"
-$env:CODEGRAPH_AUTO_INDEX = "true"
+$env:CODEGRAPH_AUTO_INDEX  = "true"
+mvn spring-boot:run
 ```
 
-对应的 `application.yml` 可以配置：
+审计日志里看到 `[codegraph] initializing CodeGraph index for MCP tools` → `[codegraph] index ready for MCP tools` 就是接上了；若看到 `init failed`，本轮会自动降级成普通文件工具继续审，不会让任务失败。
 
-```yaml
-audit:
-  codegraph:
-    enabled: ${CODEGRAPH_MCP_ENABLED:true}
-    command: C:\Users\<你的用户名>\AppData\Roaming\npm\codegraph.cmd
-    auto-index: ${CODEGRAPH_AUTO_INDEX:true}
-    tools: ${CODEGRAPH_MCP_TOOLS:codegraph_explore}
-    node-home: D:\tools\node-v22.23.1-win-x64
-```
+#### Node 版本不对怎么办（系统 Node 是 25+）
 
-审计日志中看到 `[codegraph] initializing CodeGraph index for MCP tools` 表示正在建索引；如果随后提示 init/serve 失败,本轮会继续按普通文件工具审计。
+两个选择：
+
+- **把全局 Node 换成 22 LTS**（最简单）——之后 build、link、运行都在 22 上，什么都不用额外配。
+- **保留系统的新 Node**，另外下载一份 Node 22 的免安装压缩包解压到某目录，用 `CODEGRAPH_NODE_HOME` 指过去。后端只会把这个目录塞进 **codegraph 子进程**的 PATH，不动系统全局 Node：
+
+  ```powershell
+  $env:CODEGRAPH_NODE_HOME = "D:\tools\node-v22.x-win-x64"   # 换成你解压的 Node 22 目录
+  ```
+
+  也可以写进 `application.yml`（`command` / `node-home` 换成你机器上的真实路径）：
+
+  ```yaml
+  audit:
+    codegraph:
+      enabled: ${CODEGRAPH_MCP_ENABLED:true}
+      command: ${CODEGRAPH_COMMAND:codegraph}      # PATH 找不到时写全路径 ...\npm\codegraph.cmd
+      auto-index: ${CODEGRAPH_AUTO_INDEX:true}
+      tools: ${CODEGRAPH_MCP_TOOLS:codegraph_explore}
+      node-home: ${CODEGRAPH_NODE_HOME:}           # 留空=用系统 PATH 的 Node；填了=只给 codegraph 子进程加这个 Node
+  ```
+
+> 注意：build（`npm run build`，本质是 `tsc`）在 Node 26 上也能跑；真正卡 25+ 的是 codegraph **运行**阶段（init/serve）。所以就算你用新 Node build 出了 dist，运行时还是得靠 Node 22——最省事是全程用 22。
+
+### 4. 跑测试
 
 ```powershell
 mvn test
